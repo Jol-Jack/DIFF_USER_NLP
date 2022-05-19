@@ -8,12 +8,52 @@ import tensorboardX
 import matplotlib.pyplot as plt
 from dataset import prepare_dataloaders
 from hparams import hparams as hps
-from model import Tacotron2, Tacotron2Loss, infer
+from model import Tacotron2, Tacotron2Loss
+from inference import infer
 
 np.random.seed(hps.seed)
 torch.manual_seed(hps.seed)
 torch.cuda.manual_seed(hps.seed)
 _mel_basis = None
+
+def save_checkpoint(ckpt_pth, model, optimizer, iteration, n_gpu):
+    torch.save({'model': (model.module if n_gpu > 1 else model).state_dict(),
+                'optimizer': optimizer.state_dict(), 'iteration': iteration}, ckpt_pth)
+
+def load_checkpoint(ckpt_pth, model, optimizer, device, n_gpu):
+    ckpt_dict = torch.load(ckpt_pth, map_location=device)
+    (model.module if n_gpu > 1 else model).load_state_dict(ckpt_dict['model'])
+    optimizer.load_state_dict(ckpt_dict['optimizer'])
+    iteration = ckpt_dict['iteration']
+    return model, optimizer, iteration
+
+def to_arr(var) -> np.ndarray:
+    return var.cpu().detach().numpy().astype(np.float32)
+
+def inv_melspectrogram(mel):
+    # mel = _db_to_amp(mel)
+    mel = np.exp(mel)
+
+    # S = _mel_to_linear(mel)
+    global _mel_basis
+    if _mel_basis is None:
+        n_fft = (hps.num_freq - 1) * 2
+        _mel_basis = librosa.filters.mel(hps.sample_rate, n_fft, n_mels=hps.num_mels, fmin=hps.fmin, fmax=hps.fmax)
+    inv_mel_basis = np.linalg.pinv(_mel_basis)
+    inverse = np.dot(inv_mel_basis, mel)
+    S = np.maximum(1e-10, inverse)
+
+    # _griffin_lim(S ** hps.power)
+    n_fft, hop_length, win_length = (hps.num_freq - 1) * 2, hps.frame_shift, hps.frame_length
+    angles = np.exp(2j * np.pi * np.random.rand(*S.shape))
+    S_complex = np.abs(S).astype(np.complex)
+    y = librosa.istft(S_complex * angles, hop_length=hop_length, win_length=win_length)
+    for i in range(hps.gl_iters):
+        stft = librosa.stft(y=y, n_fft=n_fft, hop_length=hop_length, win_length=win_length, pad_mode='reflect')
+        angles = np.exp(1j * np.angle(stft))
+        y = librosa.istft(S_complex * angles, hop_length=hop_length, win_length=win_length)
+    return np.clip(y, a_max=1, a_min=-1)
+
 
 class Tacotron2Logger(tensorboardX.SummaryWriter):
     def __init__(self, logdir):
@@ -26,9 +66,9 @@ class Tacotron2Logger(tensorboardX.SummaryWriter):
         self.add_scalar('learning.rate', learning_rate, iteration)
 
     def sample_train(self, outputs, iteration):
-        mel_outputs = self.to_arr(outputs[0][0])
-        mel_outputs_postnet = self.to_arr(outputs[1][0])
-        alignments = self.to_arr(outputs[3][0]).T
+        mel_outputs = to_arr(outputs[0][0])
+        mel_outputs_postnet = to_arr(outputs[1][0])
+        alignments = to_arr(outputs[3][0]).T
 
         # plot alignment, mel and postnet output
         self.add_image('train.align', self.plot_alignment_to_numpy(alignments), iteration)
@@ -36,9 +76,9 @@ class Tacotron2Logger(tensorboardX.SummaryWriter):
         self.add_image('train.mel_post', self.plot_spectrogram_to_numpy(mel_outputs_postnet), iteration)
 
     def sample_infer(self, outputs, iteration):
-        mel_outputs = self.to_arr(outputs[0][0])
-        mel_outputs_postnet = self.to_arr(outputs[1][0])
-        alignments = self.to_arr(outputs[2][0]).T
+        mel_outputs = to_arr(outputs[0][0])
+        mel_outputs_postnet = to_arr(outputs[1][0])
+        alignments = to_arr(outputs[2][0]).T
 
         # plot alignment, mel and postnet output
         self.add_image('infer.align', self.plot_alignment_to_numpy(alignments), iteration)
@@ -46,42 +86,14 @@ class Tacotron2Logger(tensorboardX.SummaryWriter):
         self.add_image('infer.mel_post', self.plot_spectrogram_to_numpy(mel_outputs_postnet), iteration)
 
         # save audio
-        wav = self.inv_melspectrogram(mel_outputs)
-        wav_postnet = self.inv_melspectrogram(mel_outputs_postnet)
+        wav = inv_melspectrogram(mel_outputs)
+        wav_postnet = inv_melspectrogram(mel_outputs_postnet)
         self.add_audio('infer.wav', wav, iteration, hps.sample_rate)
         self.add_audio('infer.wav_post', wav_postnet, iteration, hps.sample_rate)
 
-    def to_arr(self, var) -> np.ndarray:
-        return var.cpu().detach().numpy().astype(np.float32)
-
-    def inv_melspectrogram(self, mel):
-        # mel = _db_to_amp(mel)
-        mel = np.exp(mel)
-
-        # S = _mel_to_linear(mel)
-        global _mel_basis
-        if _mel_basis is None:
-            n_fft = (hps.num_freq - 1) * 2
-            _mel_basis = librosa.filters.mel(hps.sample_rate, n_fft, n_mels=hps.num_mels, fmin=hps.fmin, fmax=hps.fmax)
-        inv_mel_basis = np.linalg.pinv(_mel_basis)
-        inverse = np.dot(inv_mel_basis, mel)
-        S = np.maximum(1e-10, inverse)
-
-        # _griffin_lim(S ** hps.power)
-        n_fft, hop_length, win_length = (hps.num_freq - 1) * 2, hps.frame_shift, hps.frame_length
-        angles = np.exp(2j * np.pi * np.random.rand(*S.shape))
-        S_complex = np.abs(S).astype(np.complex)
-        y = librosa.istft(S_complex * angles, hop_length=hop_length, win_length=win_length)
-        for i in range(hps.gl_iters):
-            stft = librosa.stft(y=y, n_fft=n_fft, hop_length=hop_length, win_length=win_length, pad_mode='reflect')
-            angles = np.exp(1j * np.angle(stft))
-            y = librosa.istft(S_complex * angles, hop_length=hop_length, win_length=win_length)
-        return np.clip(y, a_max=1, a_min=-1)
-
     def plot_alignment_to_numpy(self, alignment, info=None):
         fig, ax = plt.subplots(figsize=(6, 4))
-        im = ax.imshow(alignment, aspect='auto', origin='lower',
-                       interpolation='none')
+        im = ax.imshow(alignment, aspect='auto', origin='lower', interpolation='none')
         fig.colorbar(im, ax=ax)
         xlabel = 'Decoder timestep'
         if info is not None:
@@ -99,8 +111,7 @@ class Tacotron2Logger(tensorboardX.SummaryWriter):
 
     def plot_spectrogram_to_numpy(self, spectrogram):
         fig, ax = plt.subplots(figsize=(12, 3))
-        im = ax.imshow(spectrogram, aspect="auto", origin="lower",
-                       interpolation='none')
+        im = ax.imshow(spectrogram, aspect="auto", origin="lower", interpolation='none')
         plt.colorbar(im, ax=ax)
         plt.xlabel("Frames")
         plt.ylabel("Channels")
@@ -112,20 +123,6 @@ class Tacotron2Logger(tensorboardX.SummaryWriter):
         data = data.transpose(2, 0, 1)
         plt.close()
         return data
-
-
-def load_checkpoint(ckpt_pth, model, optimizer, device, n_gpu):
-    ckpt_dict = torch.load(ckpt_pth, map_location=device)
-    (model.module if n_gpu > 1 else model).load_state_dict(ckpt_dict['model'])
-    optimizer.load_state_dict(ckpt_dict['optimizer'])
-    iteration = ckpt_dict['iteration']
-    return model, optimizer, iteration
-
-
-def save_checkpoint(model, optimizer, iteration, ckpt_pth, n_gpu):
-    torch.save({'model': (model.module if n_gpu > 1 else model).state_dict(),
-                'optimizer': optimizer.state_dict(), 'iteration': iteration}, ckpt_pth)
-
 
 def train(args):
     # setup env
@@ -231,7 +228,7 @@ def train(args):
                 # save ckpt
                 if args.ckpt_dir != '' and (iteration % hps.iters_per_ckpt == 0):
                     ckpt_pth = os.path.join(args.ckpt_dir, 'ckpt_{}'.format(iteration))
-                    save_checkpoint(model, optimizer, iteration, ckpt_pth, n_gpu)
+                    save_checkpoint(ckpt_pth, model, optimizer, iteration, n_gpu)
 
             iteration += 1
         epoch += 1
@@ -242,11 +239,10 @@ def train(args):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    # path
-    parser.add_argument('-d', '--data_dir', type=str, default='../data/TTS', help='directory to load data')
-    parser.add_argument('-l', '--log_dir', type=str, default='../models/TTS/log', help='directory to save tensorboard logs')
-    parser.add_argument('-cd', '--ckpt_dir', type=str, default='../models/TTS/ckpt', help='directory to save checkpoints')
-    parser.add_argument('-cp', '--ckpt_pth', type=str, default='../models/TTS/ckpt', help='path to load checkpoints')
+    parser.add_argument('-d', '--data_dir', type=str, default=hps.default_data_path, help='directory to load data')
+    parser.add_argument('-l', '--log_dir', type=str, default=hps.default_log_path, help='directory to save tensorboard logs')
+    parser.add_argument('-cd', '--ckpt_dir', type=str, default=hps.default_ckpt_path, help='directory to save checkpoints')
+    parser.add_argument('-cp', '--ckpt_pth', type=str, default='', help='path to load checkpoints')
 
     train_args = parser.parse_args()
 
