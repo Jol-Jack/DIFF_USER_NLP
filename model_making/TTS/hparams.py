@@ -43,6 +43,7 @@ class hparams:
     eps = 1e-5
     betas = (0.9, 0.999)
     weight_decay = 1e-6
+    dropout_rate = 0.4
     sch = True
     sch_step = 4000
     max_iter = 200e3
@@ -51,7 +52,11 @@ class hparams:
     iters_per_sample = 500
     iters_per_ckpt = 10000
     grad_clip_thresh = 1.0
-    eg_text = 'OMAK is a thinking process which considers things always positively.'
+    eg_text = '타코트론 모델의 성능 확인을 위한 예시 텍스트 입니다.'
+
+    default_data_path = "../data/TTS"
+    default_ckpt_path = "../models/TTS/ckpt"
+    default_log_path = "../models/TTS/log"
 
     # params
     # model
