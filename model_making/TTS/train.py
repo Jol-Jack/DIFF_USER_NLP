@@ -1,20 +1,18 @@
 import os
 import time
 import torch
-import librosa
 import argparse
 import numpy as np
 import tensorboardX
 import matplotlib.pyplot as plt
-from dataset import prepare_dataloaders
-from hparams import hparams as hps
+from dataset import prepare_dataloaders, inv_melspectrogram
 from model import Tacotron2, Tacotron2Loss
+from hparams import hparams as hps
 from inference import infer
 
 np.random.seed(hps.seed)
 torch.manual_seed(hps.seed)
 torch.cuda.manual_seed(hps.seed)
-_mel_basis = None
 
 def save_checkpoint(ckpt_pth, model, optimizer, iteration, n_gpu):
     torch.save({'model': (model.module if n_gpu > 1 else model).state_dict(),
@@ -29,30 +27,6 @@ def load_checkpoint(ckpt_pth, model, optimizer, device, n_gpu):
 
 def to_arr(var) -> np.ndarray:
     return var.cpu().detach().numpy().astype(np.float32)
-
-def inv_melspectrogram(mel):
-    # mel = _db_to_amp(mel)
-    mel = np.exp(mel)
-
-    # S = _mel_to_linear(mel)
-    global _mel_basis
-    if _mel_basis is None:
-        n_fft = (hps.num_freq - 1) * 2
-        _mel_basis = librosa.filters.mel(hps.sample_rate, n_fft, n_mels=hps.num_mels, fmin=hps.fmin, fmax=hps.fmax)
-    inv_mel_basis = np.linalg.pinv(_mel_basis)
-    inverse = np.dot(inv_mel_basis, mel)
-    S = np.maximum(1e-10, inverse)
-
-    # _griffin_lim(S ** hps.power)
-    n_fft, hop_length, win_length = (hps.num_freq - 1) * 2, hps.frame_shift, hps.frame_length
-    angles = np.exp(2j * np.pi * np.random.rand(*S.shape))
-    S_complex = np.abs(S).astype(np.complex)
-    y = librosa.istft(S_complex * angles, hop_length=hop_length, win_length=win_length)
-    for i in range(hps.gl_iters):
-        stft = librosa.stft(y=y, n_fft=n_fft, hop_length=hop_length, win_length=win_length, pad_mode='reflect')
-        angles = np.exp(1j * np.angle(stft))
-        y = librosa.istft(S_complex * angles, hop_length=hop_length, win_length=win_length)
-    return np.clip(y, a_max=1, a_min=-1)
 
 
 class Tacotron2Logger(tensorboardX.SummaryWriter):

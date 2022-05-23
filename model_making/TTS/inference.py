@@ -2,12 +2,11 @@ import torch
 import argparse
 import numpy as np
 import matplotlib.pylab as plt
-from dataset import text_to_sequence
+from dataset import text_to_sequence, inv_melspectrogram
 from model import Tacotron2
-from train import to_arr, inv_melspectrogram
+from train import to_arr
 from hparams import hparams as hps
 from scipy.io import wavfile
-MAX_WAV_VALUE = 32768.0
 
 def infer(text, TTSmodel):
     sequence = text_to_sequence(text)
@@ -36,7 +35,7 @@ def save_audio(outputMel, pth):
     mel_outputs, mel_outputs_postnet, _ = outputMel
     wav_postnet = inv_melspectrogram(to_arr(mel_outputs_postnet[0]))
 
-    wav_postnet *= MAX_WAV_VALUE
+    wav_postnet *= hps.MAX_WAV_VALUE
     wavfile.write(pth+".wav", hps.sample_rate, wav_postnet.astype(np.int16))
 
 def save_mel(outputMel, pth):

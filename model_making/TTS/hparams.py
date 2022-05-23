@@ -25,6 +25,7 @@ class hparams:
     seed = 7777
 
     # audio
+    MAX_WAV_VALUE = 32768.0
     num_mels = 80
     num_freq = 513
     sample_rate = 22050
@@ -37,8 +38,9 @@ class hparams:
 
     # train
     is_cuda = "cuda" if torch.cuda.is_available() else "cpu"
-    pin_mem = True
     n_workers = torch.cuda.device_count() - 1 if is_cuda == "cuda" else 2
+    pin_mem = True
+    prep = True
     lr = 2e-3
     eps = 1e-5
     betas = (0.9, 0.999)
