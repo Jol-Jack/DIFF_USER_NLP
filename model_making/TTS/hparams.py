@@ -2,24 +2,35 @@ import torch
 
 class symbols:
     pad = '[PAD]'
-    special = '-'
-    punctuation = "!'(),.:;? "
-    letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz'
-    valid_symbols = [
-        'AA', 'AA0', 'AA1', 'AA2', 'AE', 'AE0', 'AE1', 'AE2', 'AH', 'AH0', 'AH1', 'AH2',
-        'AO', 'AO0', 'AO1', 'AO2', 'AW', 'AW0', 'AW1', 'AW2', 'AY', 'AY0', 'AY1', 'AY2',
-        'B', 'CH', 'D', 'DH', 'EH', 'EH0', 'EH1', 'EH2', 'ER', 'ER0', 'ER1', 'ER2', 'EY',
-        'EY0', 'EY1', 'EY2', 'F', 'G', 'HH', 'IH', 'IH0', 'IH1', 'IH2', 'IY', 'IY0', 'IY1',
-        'IY2', 'JH', 'K', 'L', 'M', 'N', 'NG', 'OW', 'OW0', 'OW1', 'OW2', 'OY', 'OY0',
-        'OY1', 'OY2', 'P', 'R', 'S', 'SH', 'T', 'TH', 'UH', 'UH0', 'UH1', 'UH2', 'UW',
-        'UW0', 'UW1', 'UW2', 'V', 'W', 'Y', 'Z', 'ZH'
-    ]
+    punctuation = "!,.? "
+    alphabet = 'abcdefghijklmnopqrstuvwxyz'
 
-    # Prepend "@" to ARPAbet symbols to ensure uniqueness (some are the same as uppercase letters):
-    arpabet = ['@' + s for s in valid_symbols]
+    CHO = [
+        u'ᄀ', u'ᄁ', u'ᄂ', u'ᄃ', u'ᄄ', u'ᄅ', u'ᄆ', u'ᄇ', u'ᄈ', u'ᄉ',
+        u'ᄊ', u'ᄋ', u'ᄌ', u'ᄍ', u'ᄎ', u'ᄏ', u'ᄐ', u'ᄑ', u'ᄒ'
+    ]
+    JOONG = [
+        u'ᅡ', u'ᅢ', u'ᅣ', u'ᅤ', u'ᅥ', u'ᅦ', u'ᅧ', u'ᅨ', u'ᅩ', u'ᅪ',
+        u'ᅫ', u'ᅬ', u'ᅭ', u'ᅮ', u'ᅯ', u'ᅰ', u'ᅱ', u'ᅲ', u'ᅳ', u'ᅴ', u'ᅵ',
+    ]
+    JONG = [
+        u'', u'ᆨ', u'ᆩ', u'ᆪ', u'ᆫ', u'ᆬ', u'ᆭ', u'ᆮ', u'ᆯ', u'ᆰ',
+        u'ᆱ', u'ᆲ', u'ᆳ', u'ᆴ', u'ᆵ', u'ᆶ', u'ᆷ', u'ᆸ', u'ᆹ', u'ᆺ',
+        u'ᆻ', u'ᆼ', u'ᆽ', u'ᆾ', u'ᆿ', u'ᇀ', u'ᇁ', u'ᇂ'
+    ]
+    JAMO = CHO + JOONG + JONG
 
     # Export all symbols:
-    symbols = [pad] + [special] + list(punctuation) + list(letters) + arpabet
+    convert_symbols = [("(주)", "주식회사")]
+    special_ja = {"ㄲ": "쌍기역", "ㄸ": "쌍디귿", "ㅃ": "쌍비읍", "ㅆ": "쌍시옷", "ㅉ": "쌍지읒",
+                  "ㄳ": "기역시옷", "ㄵ": "니은지읒", "ㄶ": "니은히읗", "ㄺ": "리을기역", "ㄻ": "리을미음",
+                  "ㄼ": "리을비읍", "ㄽ": "리을시옷", "ㄾ": "리을티읕", "ㄿ": "리을피읖", "ㅀ": "리을히읗", "ㅄ": "비읍시옷"}
+    alpha_pron = {"a": "에이", "b": "비", "c": "씨", "d": "디", "e": "이", "f": "에프", "g": "쥐",
+                  "h": "에이치", "i": "아이", "j": "제이", "k": "케이", "l": "엘", "m": "엠", "n": "엔", "o": "오", "p": "피",
+                  "q": "큐", "r": "알", "s": "에스", "t": "티", "u": "유", "v": "브이", "w": "더블유", "x": "엑스", "y": "와이", "z": "지"}
+    number_of_digits = ["십", "백", "천", "만", "억", "조", "경", "해"]
+    digits = ["일", "이", "삼", "사", "오", "육", "칠", "팔", "구"]
+    symbols = [pad] + JAMO + list(punctuation) + list(alphabet)
 
 class hparams:
     seed = 7777
@@ -39,6 +50,7 @@ class hparams:
     # train
     is_cuda = "cuda" if torch.cuda.is_available() else "cpu"
     n_workers = torch.cuda.device_count() - 1 if is_cuda == "cuda" else 2
+    remove_alpha = True
     pin_mem = True
     prep = True
     lr = 2e-3

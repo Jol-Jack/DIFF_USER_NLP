@@ -1,37 +1,67 @@
 from torch.utils.data import DistributedSampler, DataLoader, Dataset
-from scipy.io import wavfile
 from librosa.util import normalize
-from hparams import hparams as hps
+from scipy.io import wavfile
+from hparams import hparams as hps, symbols
+from hgtk.text import compose
 from typing import List, Union
 import numpy as np
 import torch
 import librosa
 import os
+import re
+
 _mel_basis = None
+_symbol_to_id = {s: i for i, s in enumerate(symbols.symbols)}
+_id_to_symbol = {i: s for i, s in enumerate(symbols.symbols)}
 
-def text_to_sequence(text) -> List[int]:
-    sequence = []
-    while len(text):
-        m = _curly_re.match(text)
-        if not m:
-            sequence += _symbols_to_sequence(_clean_text(text, cleaner_names))
-            break
-        sequence += _symbols_to_sequence(_clean_text(m.group(1), cleaner_names))
-        sequence += _arpabet_to_sequence(m.group(2))
-        text = m.group(3)
+def convert_number(number: re.Match) -> str:
+    pass
 
-    return sequence
+def decompose_hangul(hangle: re.Match) -> str:
+    hangul = hangle.group(0)
+    if re.match("[ㄱ-ㅎ]", hangul) is not None:
+        if hangul in symbols.special_ja:
+            hangul = symbols.special_ja[hangul]
+        else:
+            middle = "ㅣ ㅇㅡ"
+            if hangul == "ㄱ":
+                middle = "ㅣ ㅇㅕ"
+            elif hangul == "ㄷ":
+                middle = "ㅣ ㄱㅡ"
+            elif hangul == "ㅅ":
+                middle = "ㅣ ㅇㅗ"
+            hangul = compose(hangul+middle+hangul+" ", compose_code=" ")
+    elif re.match("[ㅏ-ㅣ]", hangul) is not None:
+        hangul = compose("ㅇ"+hangul+" ", compose_code=" ")
+
+    char_id = ord(hangul) - int('OxAC00', 16)
+    cho_idx = char_id // 28 // 21
+    joong_idx = char_id // 28 % 21
+    jong_idx = char_id % 28
+    return symbols.CHO[cho_idx] + symbols.JOONG[joong_idx] + symbols.JONG[jong_idx]
+
+
+def prep_text(text: str, conv_alpha: bool = True) -> str:
+    # lower -> change special words -> convert alphabet(optional) -> remove white space
+    # -> remove non-eng/num/hangle/punc char -> convert number -> decompose hangle
+    text = text.lower()
+    for r_exp, word in symbols.convert_symbols:
+        text = re.sub(r_exp, word, text)
+    if conv_alpha:
+        text = re.sub("[a-z]", lambda x: symbols.alpha_pron[x.group(0)], text)
+
+    text = re.sub("\s+", " ", text)
+    text = re.sub("^[0-9a-z가-힣ㄱ-ㅎㅏ-ㅣ ,.?!]", "", text)
+    text = re.sub("[0-9]+", convert_number, text)
+    text = re.sub("[가-힣ㄱ-ㅎㅏ-ㅣ]", decompose_hangul, text)
+    return text
+
+def text_to_sequence(text: str) -> List[int]:
+    text = prep_text(text, hps.remove_alpha)
+    return [_symbol_to_id[s] for s in text if s in _symbol_to_id]
 
 def sequence_to_text(sequence) -> str:
-    result = ''
-    for symbol_id in sequence:
-        if symbol_id in _id_to_symbol:
-            s = _id_to_symbol[symbol_id]
-            # Enclose ARPAbet back in curly braces:
-            if len(s) > 1 and s[0] == '@':
-                s = '{%s}' % s[1:]
-            result += s
-    return result.replace('}{', ' ')
+    return "".join([_id_to_symbol[s] for s in sequence if s in _id_to_symbol])
 
 def prepare_dataloaders(data_dir: str, n_gpu: int) -> torch.utils.data.DataLoader:
     trainset = ljdataset(data_dir)
