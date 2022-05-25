@@ -21,7 +21,7 @@ class symbols:
     JAMO = CHO + JOONG + JONG
 
     # Export all symbols:
-    convert_symbols = [("(주)", "주식회사")]
+    convert_symbols = [("(주)", "주식회사"), ("-([0-9]+)", r"마이너스\1")]
     special_ja = {"ㄲ": "쌍기역", "ㄸ": "쌍디귿", "ㅃ": "쌍비읍", "ㅆ": "쌍시옷", "ㅉ": "쌍지읒",
                   "ㄳ": "기역시옷", "ㄵ": "니은지읒", "ㄶ": "니은히읗", "ㄺ": "리을기역", "ㄻ": "리을미음",
                   "ㄼ": "리을비읍", "ㄽ": "리을시옷", "ㄾ": "리을티읕", "ㄿ": "리을피읖", "ㅀ": "리을히읗", "ㅄ": "비읍시옷"}
@@ -29,7 +29,7 @@ class symbols:
                   "h": "에이치", "i": "아이", "j": "제이", "k": "케이", "l": "엘", "m": "엠", "n": "엔", "o": "오", "p": "피",
                   "q": "큐", "r": "알", "s": "에스", "t": "티", "u": "유", "v": "브이", "w": "더블유", "x": "엑스", "y": "와이", "z": "지"}
     number_of_digits = ["십", "백", "천", "만", "억", "조", "경", "해"]
-    digits = ["일", "이", "삼", "사", "오", "육", "칠", "팔", "구"]
+    digits = ["영", "일", "이", "삼", "사", "오", "육", "칠", "팔", "구"]
     symbols = [pad] + JAMO + list(punctuation) + list(alphabet)
 
 class hparams:
@@ -39,11 +39,11 @@ class hparams:
     MAX_WAV_VALUE = 32768.0
     num_mels = 80
     num_freq = 513
-    sample_rate = 22050
-    frame_shift = 256
-    frame_length = 1024
     fmin = 0
     fmax = 8000
+    frame_shift = 256
+    frame_length = 1024
+    sample_rate = 22050
     power = 1.5
     gl_iters = 30
 
@@ -68,9 +68,11 @@ class hparams:
     grad_clip_thresh = 1.0
     eg_text = '타코트론 모델의 성능 확인을 위한 예시 텍스트 입니다.'
 
+    # path
     default_data_path = "../data/TTS"
     default_ckpt_path = "../models/TTS/ckpt"
     default_log_path = "../models/TTS/log"
+    ignore_data_dir = ["k_kwunT"]
 
     # params
     # model

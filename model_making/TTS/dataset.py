@@ -3,7 +3,7 @@ from librosa.util import normalize
 from scipy.io import wavfile
 from hparams import hparams as hps, symbols
 from hgtk.text import compose
-from typing import List, Union
+from typing import List
 import numpy as np
 import torch
 import librosa
@@ -14,34 +14,71 @@ _mel_basis = None
 _symbol_to_id = {s: i for i, s in enumerate(symbols.symbols)}
 _id_to_symbol = {i: s for i, s in enumerate(symbols.symbols)}
 
+def get_number_of_digits(i: int) -> str:
+    assert i != 0
+
+    if i < 4:
+        num_of_digits = symbols.number_of_digits[i - 1]
+    elif i % 4 == 0:
+        num_of_digits = symbols.number_of_digits[(i // 4) + 2]
+    else:
+        num_of_digits = symbols.number_of_digits[(i % 4) - 1] + symbols.number_of_digits[(i // 4) + 2]
+
+    return num_of_digits
+
 def convert_number(number: re.Match) -> str:
-    pass
+    number = number.group(0)
+    number = number.lstrip("0")[::-1]
+    if len(number) == 0:
+        return symbols.digits[0]
 
-def decompose_hangul(hangle: re.Match) -> str:
-    hangul = hangle.group(0)
-    if re.match("[ㄱ-ㅎ]", hangul) is not None:
-        if hangul in symbols.special_ja:
-            hangul = symbols.special_ja[hangul]
+    number_list = []
+    for i, n in enumerate(number):
+        n = int(n)
+        if n == 0:
+            continue
+
+        if i == 0:
+            digits = symbols.digits[n]
+        elif n == 1:
+            digits = get_number_of_digits(i)
         else:
-            middle = "ㅣ ㅇㅡ"
-            if hangul == "ㄱ":
-                middle = "ㅣ ㅇㅕ"
-            elif hangul == "ㄷ":
-                middle = "ㅣ ㄱㅡ"
-            elif hangul == "ㅅ":
-                middle = "ㅣ ㅇㅗ"
-            hangul = compose(hangul+middle+hangul+" ", compose_code=" ")
-    elif re.match("[ㅏ-ㅣ]", hangul) is not None:
-        hangul = compose("ㅇ"+hangul+" ", compose_code=" ")
+            digits = symbols.digits[n] + get_number_of_digits(i)
+        number_list.append(digits)
 
-    char_id = ord(hangul) - int('OxAC00', 16)
-    cho_idx = char_id // 28 // 21
-    joong_idx = char_id // 28 % 21
-    jong_idx = char_id % 28
-    return symbols.CHO[cho_idx] + symbols.JOONG[joong_idx] + symbols.JONG[jong_idx]
+    return "".join(reversed(number_list))
+
+def decompose_hangul(sent: str) -> List[str]:
+    res = []
+    for hangul in sent:
+        if re.match("[가-힣ㄱ-ㅎㅏ-ㅣ]", hangul) is None:
+            res.append(hangul)
+            continue
+        if re.match("[ㄱ-ㅎ]", hangul) is not None:
+            if hangul in symbols.special_ja:
+                hangul = symbols.special_ja[hangul]
+            else:
+                middle = "ㅣ ㅇㅡ"
+                if hangul == "ㄱ":
+                    middle = "ㅣ ㅇㅕ"
+                elif hangul == "ㄷ":
+                    middle = "ㅣ ㄱㅡ"
+                elif hangul == "ㅅ":
+                    middle = "ㅣ ㅇㅗ"
+                hangul = compose(hangul+middle+hangul+" ", compose_code=" ")
+        elif re.match("[ㅏ-ㅣ]", hangul) is not None:
+            hangul = compose("ㅇ"+hangul+" ", compose_code=" ")
+
+        for c in hangul:
+            char_id = ord(c) - int('0xAC00', 16)
+            res.append(symbols.CHO[char_id // 28 // 21])
+            res.append(symbols.JOONG[char_id // 28 % 21])
+            if char_id % 28 != 0:
+                res.append(symbols.JONG[char_id % 28])
+    return res
 
 
-def prep_text(text: str, conv_alpha: bool = True) -> str:
+def prep_text(text: str, conv_alpha: bool = True) -> List[str]:
     # lower -> change special words -> convert alphabet(optional) -> remove white space
     # -> remove non-eng/num/hangle/punc char -> convert number -> decompose hangle
     text = text.lower()
@@ -51,9 +88,9 @@ def prep_text(text: str, conv_alpha: bool = True) -> str:
         text = re.sub("[a-z]", lambda x: symbols.alpha_pron[x.group(0)], text)
 
     text = re.sub("\s+", " ", text)
-    text = re.sub("^[0-9a-z가-힣ㄱ-ㅎㅏ-ㅣ ,.?!]", "", text)
+    text = re.sub("[^0-9a-z가-힣ㄱ-ㅎㅏ-ㅣ ,.?!]", "", text)
     text = re.sub("[0-9]+", convert_number, text)
-    text = re.sub("[가-힣ㄱ-ㅎㅏ-ㅣ]", decompose_hangul, text)
+    text = decompose_hangul(text)
     return text
 
 def text_to_sequence(text: str) -> List[int]:
@@ -127,9 +164,11 @@ def get_mel_text_pair(text, wav_path):
     mel = get_mel(wav_path)
     return text, mel
 
-def files_to_list(fdir) -> List[List[str, Union[str, torch.Tensor]]]:
+def files_to_list(fdir):
     f_list = []
     for data_dir in os.listdir(fdir):
+        if data_dir in hps.ignore_data_dir:
+            continue
         with open(os.path.join(fdir, data_dir, 'transcript.txt'), encoding='utf-8') as f:
             for line in f:
                 parts = line.strip().split('|')
