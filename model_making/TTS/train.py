@@ -109,7 +109,8 @@ def train(args):
         n_gpu = int(os.environ['WORLD_SIZE'])
         # noinspection PyUnresolvedReferences
         torch.distributed.init_process_group(backend='nccl', rank=local_rank, world_size=n_gpu)
-    torch.cuda.set_device(local_rank)
+    if hps.is_cuda == "cuda":
+        torch.cuda.set_device(local_rank)
     device = torch.device('cuda:{:d}'.format(local_rank))
 
     # build model

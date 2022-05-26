@@ -4,6 +4,7 @@ from scipy.io import wavfile
 from hparams import hparams as hps, symbols
 from hgtk.text import compose
 from typing import List
+import unicodedata
 import numpy as np
 import torch
 import librosa
@@ -14,6 +15,7 @@ _mel_basis = None
 _symbol_to_id = {s: i for i, s in enumerate(symbols.symbols)}
 _id_to_symbol = {i: s for i, s in enumerate(symbols.symbols)}
 
+# prerocessing functions
 def get_number_of_digits(i: int) -> str:
     assert i != 0
 
@@ -70,39 +72,43 @@ def decompose_hangul(sent: str) -> List[str]:
             hangul = compose("ㅇ"+hangul+" ", compose_code=" ")
 
         for c in hangul:
-            char_id = ord(c) - int('0xAC00', 16)
-            res.append(symbols.CHO[char_id // 28 // 21])
-            res.append(symbols.JOONG[char_id // 28 % 21])
-            if char_id % 28 != 0:
-                res.append(symbols.JONG[char_id % 28])
+            # char_id = ord(c) - int('0xAC00', 16)
+            # res.append(symbols.CHO[char_id // 28 // 21])
+            # res.append(symbols.JOONG[char_id // 28 % 21])
+            # if char_id % 28 != 0:
+            #     res.append(symbols.JONG[char_id % 28])
+            res += [jamo for jamo in unicodedata.normalize('NFKD', c)]
     return res
 
-
-def prep_text(text: str, conv_alpha: bool = True) -> List[str]:
+# text sequencing functions
+def prep_text(text: str, conv_alpha: bool = False, conv_number: bool = False) -> List[str]:
     # lower -> change special words -> convert alphabet(optional) -> remove white space
     # -> remove non-eng/num/hangle/punc char -> convert number -> decompose hangle
     text = text.lower()
     for r_exp, word in symbols.convert_symbols:
         text = re.sub(r_exp, word, text)
+
     if conv_alpha:
         text = re.sub("[a-z]", lambda x: symbols.alpha_pron[x.group(0)], text)
+    if conv_number:
+        text = re.sub("[0-9]+", convert_number, text)
 
     text = re.sub("\s+", " ", text)
     text = re.sub("[^0-9a-z가-힣ㄱ-ㅎㅏ-ㅣ ,.?!]", "", text)
-    text = re.sub("[0-9]+", convert_number, text)
     text = decompose_hangul(text)
     return text
 
 def text_to_sequence(text: str) -> List[int]:
-    text = prep_text(text, hps.remove_alpha)
+    text = prep_text(text, hps.convert_alpha, hps.convert_number)
     return [_symbol_to_id[s] for s in text if s in _symbol_to_id]
 
 def sequence_to_text(sequence) -> str:
     return "".join([_id_to_symbol[s] for s in sequence if s in _id_to_symbol])
 
+# dataloader
 def prepare_dataloaders(data_dir: str, n_gpu: int) -> torch.utils.data.DataLoader:
-    trainset = ljdataset(data_dir)
-    collate_fn = ljcollate(hps.n_frames_per_step)
+    trainset = audio_dataset(data_dir)
+    collate_fn = audio_collate(hps.n_frames_per_step)
     sampler = DistributedSampler(trainset) if n_gpu > 1 else None
     train_loader = DataLoader(trainset, num_workers=hps.n_workers, shuffle=n_gpu == 1,
                               batch_size=hps.batch_size, pin_memory=hps.pin_mem,
@@ -156,7 +162,7 @@ def get_text(text):
 def get_mel(wav_path):
     sr, wav = wavfile.read(wav_path)
     assert sr == hps.sample_rate
-    wav = normalize(wav/hps.MAX_WAV_VALUE)*0.95
+    wav = normalize(wav.reshape(-1)/hps.MAX_WAV_VALUE)*0.95
     return torch.Tensor(melspectrogram(wav).astype(np.float32))
 
 def get_mel_text_pair(text, wav_path):
@@ -167,12 +173,14 @@ def get_mel_text_pair(text, wav_path):
 def files_to_list(fdir):
     f_list = []
     for data_dir in os.listdir(fdir):
-        if data_dir in hps.ignore_data_dir:
+        if data_dir in hps.ignore_data_dir or \
+                not os.path.exists(os.path.join(fdir, data_dir, 'transcript.txt')) or \
+                not os.path.isdir(data_dir):
             continue
         with open(os.path.join(fdir, data_dir, 'transcript.txt'), encoding='utf-8') as f:
             for line in f:
                 parts = line.strip().split('|')
-                wav_path = os.path.join(fdir, data_dir, '%s.wav' % parts[0])
+                wav_path = os.path.join(fdir, data_dir, parts[0])
                 if hps.prep:
                     f_list.append(get_mel_text_pair(parts[1], wav_path))
                 else:
@@ -180,7 +188,7 @@ def files_to_list(fdir):
     return f_list
 
 
-class ljdataset(Dataset):
+class audio_dataset(Dataset):
     def __init__(self, fdir):
         self.f_list = files_to_list(fdir)
 
@@ -191,7 +199,7 @@ class ljdataset(Dataset):
     def __len__(self):
         return len(self.f_list)
 
-class ljcollate:
+class audio_collate:
     def __init__(self, n_frames_per_step):
         self.n_frames_per_step = n_frames_per_step
 
@@ -226,3 +234,14 @@ class ljcollate:
             output_lengths[i] = mel.size(1)
 
         return text_padded, input_lengths, mel_padded, gate_padded, output_lengths
+
+
+def convert_audio_file():
+    data_path = r"../../data/TTS/kss"
+    new_data_path = r"../../data/TTS/new_kss"
+    for dir_path in os.listdir(data_path):
+        if not os.path.exists(os.path.join(new_data_path, dir_path)):
+            os.mkdir(os.path.join(new_data_path, dir_path))
+        for file_path in os.listdir(os.path.join(data_path, dir_path)):
+            print(file_path)
+            os.system(f"sox {os.path.join(data_path, dir_path, file_path)} {os.path.join(new_data_path, dir_path, file_path)}")

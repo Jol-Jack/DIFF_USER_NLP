@@ -2,11 +2,13 @@ import torch
 import argparse
 import numpy as np
 import matplotlib.pylab as plt
-from dataset import text_to_sequence, inv_melspectrogram
-from model import Tacotron2
-from train import to_arr
-from hparams import hparams as hps
 from scipy.io import wavfile
+from model import Tacotron2
+from hparams import hparams as hps
+from dataset import text_to_sequence, inv_melspectrogram
+
+def to_arr(var) -> np.ndarray:
+    return var.cpu().detach().numpy().astype(np.float32)
 
 def infer(text, TTSmodel):
     sequence = text_to_sequence(text)

@@ -2,8 +2,10 @@ import torch
 
 class symbols:
     pad = '[PAD]'
+    eos = '</s>'
     punctuation = "!,.? "
     alphabet = 'abcdefghijklmnopqrstuvwxyz'
+    numbers = '0123456789'
 
     CHO = [
         u'ᄀ', u'ᄁ', u'ᄂ', u'ᄃ', u'ᄄ', u'ᄅ', u'ᄆ', u'ᄇ', u'ᄈ', u'ᄉ',
@@ -18,19 +20,21 @@ class symbols:
         u'ᆱ', u'ᆲ', u'ᆳ', u'ᆴ', u'ᆵ', u'ᆶ', u'ᆷ', u'ᆸ', u'ᆹ', u'ᆺ',
         u'ᆻ', u'ᆼ', u'ᆽ', u'ᆾ', u'ᆿ', u'ᇀ', u'ᇁ', u'ᇂ'
     ]
-    JAMO = CHO + JOONG + JONG
 
-    # Export all symbols:
-    convert_symbols = [("(주)", "주식회사"), ("-([0-9]+)", r"마이너스\1")]
+    # special symbols
+    convert_symbols = [("(주)", "주식회사"), ("-([0-9]+)", r"마이너스\1"), ("%", "퍼센트")]
     special_ja = {"ㄲ": "쌍기역", "ㄸ": "쌍디귿", "ㅃ": "쌍비읍", "ㅆ": "쌍시옷", "ㅉ": "쌍지읒",
                   "ㄳ": "기역시옷", "ㄵ": "니은지읒", "ㄶ": "니은히읗", "ㄺ": "리을기역", "ㄻ": "리을미음",
                   "ㄼ": "리을비읍", "ㄽ": "리을시옷", "ㄾ": "리을티읕", "ㄿ": "리을피읖", "ㅀ": "리을히읗", "ㅄ": "비읍시옷"}
     alpha_pron = {"a": "에이", "b": "비", "c": "씨", "d": "디", "e": "이", "f": "에프", "g": "쥐",
                   "h": "에이치", "i": "아이", "j": "제이", "k": "케이", "l": "엘", "m": "엠", "n": "엔", "o": "오", "p": "피",
-                  "q": "큐", "r": "알", "s": "에스", "t": "티", "u": "유", "v": "브이", "w": "더블유", "x": "엑스", "y": "와이", "z": "지"}
+                  "q": "큐", "r": "알", "s": "에스", "t": "티", "u": "유", "v": "브이", "w": "더블유", "x": "엑스", "y": "와이",
+                  "z": "지"}
     number_of_digits = ["십", "백", "천", "만", "억", "조", "경", "해"]
     digits = ["영", "일", "이", "삼", "사", "오", "육", "칠", "팔", "구"]
-    symbols = [pad] + JAMO + list(punctuation) + list(alphabet)
+
+    # Export all symbols:
+    symbols = [pad] + [eos] + CHO + JOONG + JONG + list(alphabet) + list(numbers) + list(punctuation)
 
 class hparams:
     seed = 7777
@@ -43,14 +47,15 @@ class hparams:
     fmax = 8000
     frame_shift = 256
     frame_length = 1024
-    sample_rate = 22050
+    sample_rate = 44100
     power = 1.5
     gl_iters = 30
 
     # train
     is_cuda = "cuda" if torch.cuda.is_available() else "cpu"
     n_workers = torch.cuda.device_count() - 1 if is_cuda == "cuda" else 2
-    remove_alpha = True
+    convert_alpha = False
+    convert_number = False
     pin_mem = True
     prep = True
     lr = 2e-3
@@ -69,9 +74,9 @@ class hparams:
     eg_text = '타코트론 모델의 성능 확인을 위한 예시 텍스트 입니다.'
 
     # path
-    default_data_path = "../data/TTS"
-    default_ckpt_path = "../models/TTS/ckpt"
-    default_log_path = "../models/TTS/log"
+    default_data_path = "../../data/TTS"
+    default_ckpt_path = "../../models/TTS/ckpt"
+    default_log_path = "../../models/TTS/log"
     ignore_data_dir = ["k_kwunT"]
 
     # params
