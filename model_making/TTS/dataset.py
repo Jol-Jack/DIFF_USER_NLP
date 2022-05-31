@@ -4,6 +4,7 @@ from scipy.io import wavfile
 from hparams import hparams as hps, symbols
 from hgtk.text import compose
 from typing import List
+from tqdm import tqdm
 import unicodedata
 import numpy as np
 import torch
@@ -175,16 +176,18 @@ def files_to_list(fdir):
     for data_dir in os.listdir(fdir):
         if data_dir in hps.ignore_data_dir or \
                 not os.path.exists(os.path.join(fdir, data_dir, 'transcript.txt')) or \
-                not os.path.isdir(data_dir):
+                not os.path.isdir(os.path.join(fdir, data_dir)):
             continue
         with open(os.path.join(fdir, data_dir, 'transcript.txt'), encoding='utf-8') as f:
-            for line in f:
+            for line in tqdm(f, desc=f"loading data from {data_dir}"):
                 parts = line.strip().split('|')
                 wav_path = os.path.join(fdir, data_dir, parts[0])
                 if hps.prep:
                     f_list.append(get_mel_text_pair(parts[1], wav_path))
                 else:
                     f_list.append([parts[1], wav_path])
+
+    assert f_list != []
     return f_list
 
 

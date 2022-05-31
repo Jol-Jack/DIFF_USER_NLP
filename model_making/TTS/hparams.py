@@ -54,8 +54,8 @@ class hparams:
     # train
     is_cuda = "cuda" if torch.cuda.is_available() else "cpu"
     n_workers = torch.cuda.device_count() - 1 if is_cuda == "cuda" else 2
-    convert_alpha = False
-    convert_number = False
+    convert_alpha = True
+    convert_number = True
     pin_mem = True
     prep = True
     lr = 2e-3
