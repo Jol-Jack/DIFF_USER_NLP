@@ -34,7 +34,7 @@ class symbols:
     digits = ["영", "일", "이", "삼", "사", "오", "육", "칠", "팔", "구"]
 
     # Export all symbols:
-    symbols = [pad] + [eos] + CHO + JOONG + JONG + list(alphabet) + list(numbers) + list(punctuation)
+    symbols = [pad] + [eos] + CHO + JOONG + JONG[1:] + list(alphabet) + list(numbers) + list(punctuation)
 
 class hparams:
     seed = 7777
@@ -47,7 +47,7 @@ class hparams:
     fmax = 8000
     frame_shift = 256
     frame_length = 1024
-    sample_rate = 44100
+    sample_rate = 22500
     power = 1.5
     gl_iters = 30
 

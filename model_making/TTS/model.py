@@ -129,62 +129,6 @@ class Tacotron2Loss(nn.Module):
         return mel_loss + gate_loss, (mel_loss.item(), gate_loss.item())
 
 
-class Prenet(nn.Module):
-    def __init__(self, in_dim, sizes):
-        super(Prenet, self).__init__()
-        in_sizes = [in_dim] + sizes[:-1]
-        self.layers = nn.ModuleList([LinearNorm(in_size, out_size, bias=False) for (in_size, out_size) in zip(in_sizes, sizes)])
-
-    def forward(self, x):
-        for linear in self.layers:
-            x = F.dropout(F.relu(linear(x)), p=hps.dropout_rate, training=True)
-        return x
-
-class Postnet(nn.Module):
-    """
-    Postnet
-        - Five 1-d convolution with 512 channels and kernel size 5
-    """
-
-    def __init__(self):
-        super(Postnet, self).__init__()
-        self.convolutions = nn.ModuleList()
-
-        self.convolutions.append(
-            nn.Sequential(
-                ConvNorm(hps.num_mels, hps.postnet_embedding_dim,
-                         kernel_size=hps.postnet_kernel_size, stride=1,
-                         padding=int((hps.postnet_kernel_size - 1) / 2),
-                         dilation=1, w_init_gain='tanh'),
-                nn.BatchNorm1d(hps.postnet_embedding_dim))
-        )
-
-        for i in range(1, hps.postnet_n_convolutions - 1):
-            self.convolutions.append(
-                nn.Sequential(
-                    ConvNorm(hps.postnet_embedding_dim,
-                             hps.postnet_embedding_dim,
-                             kernel_size=hps.postnet_kernel_size, stride=1,
-                             padding=int((hps.postnet_kernel_size - 1) / 2),
-                             dilation=1, w_init_gain='tanh'),
-                    nn.BatchNorm1d(hps.postnet_embedding_dim))
-            )
-
-        self.convolutions.append(
-            nn.Sequential(
-                ConvNorm(hps.postnet_embedding_dim, hps.num_mels,
-                         kernel_size=hps.postnet_kernel_size, stride=1,
-                         padding=int((hps.postnet_kernel_size - 1) / 2),
-                         dilation=1, w_init_gain='linear'),
-                nn.BatchNorm1d(hps.num_mels))
-        )
-
-    def forward(self, x):
-        for i in range(len(self.convolutions) - 1):
-            x = F.dropout(torch.tanh(self.convolutions[i](x)), 0.5, self.training)
-        x = F.dropout(self.convolutions[-1](x), 0.5, self.training)
-        return x
-
 class Encoder(nn.Module):
     """Encoder module:
         - Three 1-d convolution banks
@@ -231,6 +175,17 @@ class Encoder(nn.Module):
         self.lstm.flatten_parameters()
         outputs, _ = self.lstm(x)
         return outputs
+
+class Prenet(nn.Module):
+    def __init__(self, in_dim, sizes):
+        super(Prenet, self).__init__()
+        in_sizes = [in_dim] + sizes[:-1]
+        self.layers = nn.ModuleList([LinearNorm(in_size, out_size, bias=False) for (in_size, out_size) in zip(in_sizes, sizes)])
+
+    def forward(self, x):
+        for linear in self.layers:
+            x = F.dropout(F.relu(linear(x)), p=hps.dropout_rate, training=True)
+        return x
 
 class Decoder(nn.Module):
     def __init__(self):
@@ -449,6 +404,51 @@ class Decoder(nn.Module):
 
         mel_outputs, gate_outputs, alignments = self.parse_decoder_outputs(mel_outputs, gate_outputs, alignments)
         return mel_outputs, gate_outputs, alignments
+
+class Postnet(nn.Module):
+    """
+    Postnet
+        - Five 1-d convolution with 512 channels and kernel size 5
+    """
+
+    def __init__(self):
+        super(Postnet, self).__init__()
+        self.convolutions = nn.ModuleList()
+
+        self.convolutions.append(
+            nn.Sequential(
+                ConvNorm(hps.num_mels, hps.postnet_embedding_dim,
+                         kernel_size=hps.postnet_kernel_size, stride=1,
+                         padding=int((hps.postnet_kernel_size - 1) / 2),
+                         dilation=1, w_init_gain='tanh'),
+                nn.BatchNorm1d(hps.postnet_embedding_dim))
+        )
+
+        for i in range(1, hps.postnet_n_convolutions - 1):
+            self.convolutions.append(
+                nn.Sequential(
+                    ConvNorm(hps.postnet_embedding_dim,
+                             hps.postnet_embedding_dim,
+                             kernel_size=hps.postnet_kernel_size, stride=1,
+                             padding=int((hps.postnet_kernel_size - 1) / 2),
+                             dilation=1, w_init_gain='tanh'),
+                    nn.BatchNorm1d(hps.postnet_embedding_dim))
+            )
+
+        self.convolutions.append(
+            nn.Sequential(
+                ConvNorm(hps.postnet_embedding_dim, hps.num_mels,
+                         kernel_size=hps.postnet_kernel_size, stride=1,
+                         padding=int((hps.postnet_kernel_size - 1) / 2),
+                         dilation=1, w_init_gain='linear'),
+                nn.BatchNorm1d(hps.num_mels))
+        )
+
+    def forward(self, x):
+        for i in range(len(self.convolutions) - 1):
+            x = F.dropout(torch.tanh(self.convolutions[i](x)), 0.5, self.training)
+        x = F.dropout(self.convolutions[-1](x), 0.5, self.training)
+        return x
 
 class Tacotron2(nn.Module):
     def __init__(self):

@@ -238,13 +238,3 @@ class audio_collate:
 
         return text_padded, input_lengths, mel_padded, gate_padded, output_lengths
 
-
-def convert_audio_file():
-    data_path = r"../../data/TTS/kss"
-    new_data_path = r"../../data/TTS/new_kss"
-    for dir_path in os.listdir(data_path):
-        if not os.path.exists(os.path.join(new_data_path, dir_path)):
-            os.mkdir(os.path.join(new_data_path, dir_path))
-        for file_path in os.listdir(os.path.join(data_path, dir_path)):
-            print(file_path)
-            os.system(f"sox {os.path.join(data_path, dir_path, file_path)} {os.path.join(new_data_path, dir_path, file_path)}")
