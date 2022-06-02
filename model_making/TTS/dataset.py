@@ -3,12 +3,16 @@ from librosa.util import normalize
 from scipy.io import wavfile
 from hparams import hparams as hps, symbols
 from hgtk.text import compose
+from pathlib import Path
 from typing import List
 from tqdm import tqdm
+import matplotlib.pyplot as plt
 import unicodedata
 import numpy as np
 import torch
+import soundfile as sf
 import librosa
+import glob
 import os
 import re
 
@@ -238,3 +242,63 @@ class audio_collate:
 
         return text_padded, input_lengths, mel_padded, gate_padded, output_lengths
 
+class audio_preprocesser:
+    def __init__(self):
+        self.run()
+
+    def trim_audio(self, wav, top_db=10, pad_len=4000):
+        # remove space
+        non_silence_indices = librosa.effects.split(wav, top_db=top_db)
+        start = non_silence_indices[0][0]
+        end = non_silence_indices[-1][1]
+        # cutting audio
+        wav = wav[start:end]
+        # add padding
+        wav = np.hstack([np.zeros(pad_len), wav, np.zeros(pad_len)])
+        return wav
+
+    def plot_wav(self, wav, sr):
+        plt.figure(1)
+
+        plot_a = plt.subplot(211)
+        plot_a.plot(wav)
+        plot_a.set_xlabel('sample rate * time')
+        plot_a.set_ylabel('energy')
+
+        plot_b = plt.subplot(212)
+        plot_b.specgram(wav, NFFT=1024, Fs=sr, noverlap=900)
+        plot_b.set_xlabel('Time')
+        plot_b.set_ylabel('Frequency')
+
+        plt.show()
+
+    def run(self):
+        # remove smaller sound than specific decibel(depending personal setting)
+        decibel = 10
+        sampling_rate = hps.sample_rate
+        root_path = hps.default_data_path
+
+        for dir_name in os.listdir(root_path):
+            save_path = os.path.join(root_path, f"trim_{dir_name}")
+            os.makedirs(save_path, exist_ok=True)
+
+            file_list = []
+            for sub_dir_name in os.listdir(os.path.join(root_path, dir_name)):
+                if not os.path.isdir(os.path.join(root_path, dir_name, sub_dir_name)):
+                    continue
+                sub_file_list = glob.glob(os.path.join(root_path, dir_name, sub_dir_name, "*.wav"))
+                file_list.extend(sub_file_list)
+
+            for file_path in tqdm(file_list, desc=f"{dir_name} files converting"):
+                wav, sr = librosa.load(file_path, sr=sampling_rate)
+
+                trimed_wav = self.trim_audio(wav, top_db=decibel)
+
+                filename = Path(file_path).name
+                temp_save_path = os.path.join(save_path, filename)
+
+                sf.write(temp_save_path, trimed_wav, sampling_rate)
+
+
+if __name__ == '__main__':
+    ap = audio_preprocesser()

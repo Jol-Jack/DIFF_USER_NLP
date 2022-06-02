@@ -47,7 +47,7 @@ class hparams:
     fmax = 8000
     frame_shift = 256
     frame_length = 1024
-    sample_rate = 22500
+    sample_rate = 22050
     power = 1.5
     gl_iters = 30
 
