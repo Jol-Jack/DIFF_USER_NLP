@@ -282,23 +282,18 @@ class audio_preprocesser:
             save_path = os.path.join(root_path, f"trim_{dir_name}")
             os.makedirs(save_path, exist_ok=True)
 
-            file_list = []
             for sub_dir_name in os.listdir(os.path.join(root_path, dir_name)):
                 if not os.path.isdir(os.path.join(root_path, dir_name, sub_dir_name)):
                     continue
-                sub_file_list = glob.glob(os.path.join(root_path, dir_name, sub_dir_name, "*.wav"))
-                file_list.extend(sub_file_list)
+                os.makedirs(os.path.join(root_path, dir_name, sub_dir_name), exist_ok=True)
+                file_list = glob.glob(os.path.join(root_path, dir_name, sub_dir_name, "*.wav"))
 
-            for file_path in tqdm(file_list, desc=f"{dir_name} files converting"):
-                wav, sr = librosa.load(file_path, sr=sampling_rate)
+                for file_path in tqdm(file_list, desc=f"{dir_name}/{sub_dir_name} files converting"):
+                    wav, sr = librosa.load(file_path, sr=sampling_rate, mono=True)
 
-                trimed_wav = self.trim_audio(wav, top_db=decibel)
+                    trimed_wav = self.trim_audio(wav, top_db=decibel)
 
-                filename = Path(file_path).name
-                temp_save_path = os.path.join(save_path, filename)
+                    filename = Path(file_path).name
+                    temp_save_path = os.path.join(save_path, sub_dir_name, filename)
 
-                sf.write(temp_save_path, trimed_wav, sampling_rate)
-
-
-if __name__ == '__main__':
-    ap = audio_preprocesser()
+                    sf.write(temp_save_path, trimed_wav, sampling_rate)
