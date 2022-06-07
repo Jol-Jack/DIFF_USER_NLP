@@ -1,12 +1,11 @@
 import torch
+import os
 
 class symbols:
-    pad = '[PAD]'
-    eos = '</s>'
-    punctuation = "!,.? "
-    alphabet = 'abcdefghijklmnopqrstuvwxyz'
-    numbers = '0123456789'
-
+    _pad = '_'
+    _punctuation = '!,.? '
+    _alphabet = 'abcdefghijklmnopqrstuvwxyz'
+    _numbers = '0123456789'
     CHO = [
         u'ᄀ', u'ᄁ', u'ᄂ', u'ᄃ', u'ᄄ', u'ᄅ', u'ᄆ', u'ᄇ', u'ᄈ', u'ᄉ',
         u'ᄊ', u'ᄋ', u'ᄌ', u'ᄍ', u'ᄎ', u'ᄏ', u'ᄐ', u'ᄑ', u'ᄒ'
@@ -22,7 +21,6 @@ class symbols:
     ]
 
     # special symbols
-    convert_symbols = [("(주)", "주식회사"), ("-([0-9]+)", r"마이너스\1"), ("%", "퍼센트")]
     special_ja = {"ㄲ": "쌍기역", "ㄸ": "쌍디귿", "ㅃ": "쌍비읍", "ㅆ": "쌍시옷", "ㅉ": "쌍지읒",
                   "ㄳ": "기역시옷", "ㄵ": "니은지읒", "ㄶ": "니은히읗", "ㄺ": "리을기역", "ㄻ": "리을미음",
                   "ㄼ": "리을비읍", "ㄽ": "리을시옷", "ㄾ": "리을티읕", "ㄿ": "리을피읖", "ㅀ": "리을히읗", "ㅄ": "비읍시옷"}
@@ -34,74 +32,86 @@ class symbols:
     digits = ["영", "일", "이", "삼", "사", "오", "육", "칠", "팔", "구"]
 
     # Export all symbols:
-    symbols = [pad] + [eos] + CHO + JOONG + JONG[1:] + list(alphabet) + list(numbers) + list(punctuation)
+    symbols = [_pad] + CHO + JOONG + JONG[1:] + list(_alphabet) + list(_numbers) + list(_punctuation)
 
 class hparams:
+    ################################
+    # Experiment Parameters        #
+    ################################
+    epochs = 500
+    iters_per_checkpoint = 1000
     seed = 7777
+    dynamic_loss_scaling = True
+    distributed_run = False
+    dist_backend = "nccl"
+    dist_url = "tcp://localhost:54321"
+    cudnn_enabled = torch.cuda.is_available()
+    cudnn_benchmark = False
+    ignore_layers = ['embedding.weight']
 
-    # audio
-    MAX_WAV_VALUE = 32768.0
-    num_mels = 80
-    num_freq = 513
-    fmin = 0
-    fmax = 8000
-    frame_shift = 256
-    frame_length = 1024
-    sample_rate = 22050
-    power = 1.5
-    gl_iters = 30
+    ################################
+    # Data Parameters             #
+    ################################
+    load_mel_from_disk = False
+    ckp_for_transfer = None
+    ignore_dir = 'trim_k_kwunT'
+    training_files = '../../data/TTS/train.txt'
+    validation_files = '../../data/TTS/val.txt'
+    model_output_path = '../../models/TTS/ckpt'
+    logging_dir = '../../models/TTS/log'
 
-    # train
-    is_cuda = "cuda" if torch.cuda.is_available() else "cpu"
-    n_workers = torch.cuda.device_count() - 1 if is_cuda == "cuda" else 2
-    convert_alpha = True
-    convert_number = True
-    pin_mem = True
-    prep = True
-    lr = 2e-3
-    eps = 1e-5
-    betas = (0.9, 0.999)
-    weight_decay = 1e-6
-    dropout_rate = 0.4
-    sch = True
-    sch_step = 4000
-    max_iter = 200e3
-    batch_size = 16
-    iters_per_log = 10
-    iters_per_sample = 500
-    iters_per_ckpt = 10000
-    grad_clip_thresh = 1.0
-    eg_text = '타코트론 모델의 성능 확인을 위한 예시 텍스트 입니다.'
+    ################################
+    # Audio Parameters             #
+    ################################
+    max_wav_value = 32768.0
+    sampling_rate = 22050
+    filter_length = 1024
+    hop_length = 256
+    win_length = 1024
+    n_mel_channels = 80
+    mel_fmin = 0.0
+    mel_fmax = 8000.0
 
-    # path
-    default_data_path = "../../data/TTS"
-    default_ckpt_path = "../../models/TTS/ckpt"
-    default_log_path = "../../models/TTS/log"
-    ignore_data_dir = ["k_kwunT"]
-
-    # params
-    # model
+    ################################
+    # Model Parameters             #
+    ################################
     n_symbols = len(symbols.symbols)
     symbols_embedding_dim = 512
+    n_device = torch.cuda.device_count() if torch.cuda.is_available() else os.cpu_count() - 1
+
     # Encoder parameters
     encoder_kernel_size = 5
     encoder_n_convolutions = 3
     encoder_embedding_dim = 512
+
     # Decoder parameters
-    n_frames_per_step = 3
+    n_frames_per_step = 1  # currently only 1 is supported
     decoder_rnn_dim = 1024
     prenet_dim = 256
-    max_decoder_ratio = 10
+    max_decoder_steps = 1000
     gate_threshold = 0.5
     p_attention_dropout = 0.1
     p_decoder_dropout = 0.1
+
     # Attention parameters
     attention_rnn_dim = 1024
     attention_dim = 128
+
     # Location Layer parameters
     attention_location_n_filters = 32
     attention_location_kernel_size = 31
+
     # Mel-post processing network parameters
+    postnet_embedding_dim = 512
     postnet_kernel_size = 5
     postnet_n_convolutions = 5
-    postnet_embedding_dim = 512
+
+    ################################
+    # Optimization Hyperparameters #
+    ################################
+    use_saved_learning_rate = False
+    learning_rate = 1e-3
+    weight_decay = 1e-6
+    grad_clip_thresh = 1.0
+    batch_size = 64
+    mask_padding = True  # set model's padded outputs to padded values

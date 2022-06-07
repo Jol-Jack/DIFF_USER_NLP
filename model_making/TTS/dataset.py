@@ -1,26 +1,37 @@
-from torch.utils.data import DistributedSampler, DataLoader, Dataset
-from librosa.util import normalize
-from scipy.io import wavfile
-from hparams import hparams as hps, symbols
-from hgtk.text import compose
-from pathlib import Path
-from typing import List
-from tqdm import tqdm
-import matplotlib.pyplot as plt
-import unicodedata
-import numpy as np
-import torch
-import soundfile as sf
-import librosa
-import glob
 import os
 import re
+import torch
+import unicodedata
+import random
+import numpy as np
+import matplotlib.pyplot as plt
+from hgtk.text import compose
+from typing import List
 
-_mel_basis = None
+import glob
+import librosa
+import soundfile as sf
+from tqdm import tqdm
+from pathlib import Path
+from scipy.io.wavfile import read
+
+from model import TacotronSTFT
+from hparams import symbols, hparams as hps
 _symbol_to_id = {s: i for i, s in enumerate(symbols.symbols)}
 _id_to_symbol = {i: s for i, s in enumerate(symbols.symbols)}
 
-# prerocessing functions
+def split_train_val():
+    train = ""
+    val = ""
+    for dir_path in ["../../data/TTS/trim_k_kwunT", "../../data/TTS/trim_kss"]:
+        for line in open(os.path.join(dir_path, "transcript.txt"), "r+", encoding="utf-8").readlines():
+            if random.random() > 0.2:
+                train += dir_path + "/" + line
+            else:
+                val += dir_path + "/" + line
+    open("../../data/TTS/train.txt", "w+", encoding="utf-8").write(train)
+    open("../../data/TTS/val.txt", "w+", encoding="utf-8").write(val)
+
 def get_number_of_digits(i: int) -> str:
     assert i != 0
 
@@ -55,162 +66,120 @@ def convert_number(number: re.Match) -> str:
 
     return "".join(reversed(number_list))
 
-def decompose_hangul(sent: str) -> List[str]:
-    res = []
-    for hangul in sent:
-        if re.match("[가-힣ㄱ-ㅎㅏ-ㅣ]", hangul) is None:
-            res.append(hangul)
-            continue
-        if re.match("[ㄱ-ㅎ]", hangul) is not None:
-            if hangul in symbols.special_ja:
-                hangul = symbols.special_ja[hangul]
-            else:
-                middle = "ㅣ ㅇㅡ"
-                if hangul == "ㄱ":
-                    middle = "ㅣ ㅇㅕ"
-                elif hangul == "ㄷ":
-                    middle = "ㅣ ㄱㅡ"
-                elif hangul == "ㅅ":
-                    middle = "ㅣ ㅇㅗ"
-                hangul = compose(hangul+middle+hangul+" ", compose_code=" ")
-        elif re.match("[ㅏ-ㅣ]", hangul) is not None:
-            hangul = compose("ㅇ"+hangul+" ", compose_code=" ")
+def convert_cons_or_vowel(char: re.Match) -> str:
+    char = char.group(0)
+    if re.match("[ㄱ-ㅎ]", char) is not None:
+        if char in symbols.special_ja:
+            hangul = symbols.special_ja[char]
+        else:
+            middle = "ㅣ ㅇㅡ"
+            if char == "ㄱ":
+                middle = "ㅣ ㅇㅕ"
+            elif char == "ㄷ":
+                middle = "ㅣ ㄱㅡ"
+            elif char == "ㅅ":
+                middle = "ㅣ ㅇㅗ"
+            hangul = compose(char + middle + char + " ", compose_code=" ")
+    else:
+        hangul = compose("ㅇ" + char + " ", compose_code=" ")
+    return hangul
 
-        for c in hangul:
-            # char_id = ord(c) - int('0xAC00', 16)
-            # res.append(symbols.CHO[char_id // 28 // 21])
-            # res.append(symbols.JOONG[char_id // 28 % 21])
-            # if char_id % 28 != 0:
-            #     res.append(symbols.JONG[char_id % 28])
-            res += [jamo for jamo in unicodedata.normalize('NFKD', c)]
-    return res
 
-# text sequencing functions
-def prep_text(text: str, conv_alpha: bool = False, conv_number: bool = False) -> List[str]:
-    # lower -> change special words -> convert alphabet(optional) -> remove white space
-    # -> remove non-eng/num/hangle/punc char -> convert number -> decompose hangle
+def text_to_sequence(text: str, conv_alpha: bool = True, conv_number: bool = True) -> List[int]:
+    # text preprocessing
     text = text.lower()
-    for r_exp, word in symbols.convert_symbols:
-        text = re.sub(r_exp, word, text)
-
+    text = re.sub("[^0-9a-z가-힣ㄱ-ㅎㅏ-ㅣ ,.?!]", "", text)
     if conv_alpha:
         text = re.sub("[a-z]", lambda x: symbols.alpha_pron[x.group(0)], text)
     if conv_number:
         text = re.sub("[0-9]+", convert_number, text)
+    text = re.sub("[ㄱ-ㅎㅏ-ㅣ]", convert_cons_or_vowel, text)
+    # decompose hangul
+    res = []
+    for c in text:
+        res += [jamo for jamo in unicodedata.normalize('NFKD', c)]
+    # symbols to ids
+    return [_symbol_to_id[s] for s in res if s in _symbol_to_id]
 
-    text = re.sub("\s+", " ", text)
-    text = re.sub("[^0-9a-z가-힣ㄱ-ㅎㅏ-ㅣ ,.?!]", "", text)
-    text = decompose_hangul(text)
-    return text
-
-def text_to_sequence(text: str) -> List[int]:
-    text = prep_text(text, hps.convert_alpha, hps.convert_number)
-    return [_symbol_to_id[s] for s in text if s in _symbol_to_id]
-
-def sequence_to_text(sequence) -> str:
+def sequence_to_text(sequence: List[int]) -> str:
+    """Converts a sequence of IDs back to a string"""
     return "".join([_id_to_symbol[s] for s in sequence if s in _id_to_symbol])
 
-# dataloader
-def prepare_dataloaders(data_dir: str, n_gpu: int) -> torch.utils.data.DataLoader:
-    trainset = audio_dataset(data_dir)
-    collate_fn = audio_collate(hps.n_frames_per_step)
-    sampler = DistributedSampler(trainset) if n_gpu > 1 else None
-    train_loader = DataLoader(trainset, num_workers=hps.n_workers, shuffle=n_gpu == 1,
-                              batch_size=hps.batch_size, pin_memory=hps.pin_mem,
-                              drop_last=True, collate_fn=collate_fn, sampler=sampler)
-    return train_loader
 
+class TextMelLoader(torch.utils.data.Dataset):
+    """
+        1) loads audio,text pairs
+        2) normalizes text and converts them to sequences of one-hot vectors
+        3) computes mel-spectrograms from audio files.
+    """
+    def __init__(self, audiopaths_and_text: str, hparams):
+        self.audiopaths_and_text = self.load_filepaths_and_text(audiopaths_and_text)
+        self.max_wav_value = hparams.max_wav_value
+        self.sampling_rate = hparams.sampling_rate
+        self.load_mel_from_disk = hparams.load_mel_from_disk
+        self.ignore_dir = hparams.ignore_dir
+        self.stft = TacotronSTFT(
+            hparams.filter_length, hparams.hop_length, hparams.win_length,
+            hparams.n_mel_channels, hparams.sampling_rate, hparams.mel_fmin,
+            hparams.mel_fmax)
+        random.seed(hparams.seed)
+        random.shuffle(self.audiopaths_and_text)
 
-# datasets
-def _build_mel_basis():
-    n_fft = (hps.num_freq - 1) * 2
-    return librosa.filters.mel(hps.sample_rate, n_fft, n_mels=hps.num_mels, fmin=hps.fmin, fmax=hps.fmax)
+    def load_filepaths_and_text(self, filename, split="|"):
+        with open(filename, encoding='utf-8') as f:
+            filepaths_and_text = [line.strip().split(split) for line in f
+                                  if not any(ignore in line.strip().split(split)[0] for ignore in self.ignore_dir)]
+        return filepaths_and_text
 
-def melspectrogram(y):
-    # _stft(y)
-    n_fft, hop_length, win_length = (hps.num_freq - 1) * 2, hps.frame_shift, hps.frame_length
-    D = librosa.stft(y=y, n_fft=n_fft, hop_length=hop_length, win_length=win_length, pad_mode='reflect')
-
-    # _amp_to_db(_linear_to_mel(np.abs(D)))
-    global _mel_basis
-    if _mel_basis is None:
-        _mel_basis = _build_mel_basis()
-    return np.log(np.maximum(1e-5, np.dot(_mel_basis, np.abs(D))))
-
-def inv_melspectrogram(mel):
-    # mel = _db_to_amp(mel)
-    mel = np.exp(mel)
-
-    # S = _mel_to_linear(mel)
-    global _mel_basis
-    if _mel_basis is None:
-        _mel_basis = _build_mel_basis()
-    inv_mel_basis = np.linalg.pinv(_mel_basis)
-    inverse = np.dot(inv_mel_basis, mel)
-    S = np.maximum(1e-10, inverse)
-
-    # _griffin_lim(S ** hps.power)
-    n_fft, hop_length, win_length = (hps.num_freq - 1) * 2, hps.frame_shift, hps.frame_length
-    angles = np.exp(2j * np.pi * np.random.rand(*S.shape))
-    S_complex = np.abs(S).astype(np.complex)
-    y = librosa.istft(S_complex * angles, hop_length=hop_length, win_length=win_length)
-    for i in range(hps.gl_iters):
-        stft = librosa.stft(y=y, n_fft=n_fft, hop_length=hop_length, win_length=win_length, pad_mode='reflect')
-        angles = np.exp(1j * np.angle(stft))
-        y = librosa.istft(S_complex * angles, hop_length=hop_length, win_length=win_length)
-    return np.clip(y, a_max=1, a_min=-1)
-
-
-def get_text(text):
-    return torch.IntTensor(text_to_sequence(text))
-
-def get_mel(wav_path):
-    sr, wav = wavfile.read(wav_path)
-    assert sr == hps.sample_rate
-    wav = normalize(wav.reshape(-1)/hps.MAX_WAV_VALUE)*0.95
-    return torch.Tensor(melspectrogram(wav).astype(np.float32))
-
-def get_mel_text_pair(text, wav_path):
-    text = get_text(text)
-    mel = get_mel(wav_path)
-    return text, mel
-
-def files_to_list(fdir):
-    f_list = []
-    for data_dir in os.listdir(fdir):
-        if data_dir in hps.ignore_data_dir or \
-                not os.path.exists(os.path.join(fdir, data_dir, 'transcript.txt')) or \
-                not os.path.isdir(os.path.join(fdir, data_dir)):
-            continue
-        with open(os.path.join(fdir, data_dir, 'transcript.txt'), encoding='utf-8') as f:
-            for line in tqdm(f, desc=f"loading data from {data_dir}"):
-                parts = line.strip().split('|')
-                wav_path = os.path.join(fdir, data_dir, parts[0])
-                if hps.prep:
-                    f_list.append(get_mel_text_pair(parts[1], wav_path))
-                else:
-                    f_list.append([parts[1], wav_path])
-
-    assert f_list != []
-    return f_list
-
-
-class audio_dataset(Dataset):
-    def __init__(self, fdir):
-        self.f_list = files_to_list(fdir)
-
-    def __getitem__(self, index):
-        text, mel = self.f_list[index] if hps.prep else get_mel_text_pair(*self.f_list[index])
+    def get_mel_text_pair(self, audiopath_and_text):
+        # separate filename and text
+        audiopath, text = audiopath_and_text[0], audiopath_and_text[2]
+        text = self.get_text(text)
+        mel = self.get_mel(audiopath)
         return text, mel
 
-    def __len__(self):
-        return len(self.f_list)
+    def get_mel(self, filename):
+        if not self.load_mel_from_disk:
+            audio, sampling_rate = self.load_wav_to_torch(filename)
+            if sampling_rate != self.stft.sampling_rate:
+                raise ValueError("{} SR doesn't match target {} SR".format(
+                    sampling_rate, self.stft.sampling_rate))
+            audio_norm = audio / self.max_wav_value
+            audio_norm = audio_norm.unsqueeze(0)
+            audio_norm = torch.autograd.Variable(audio_norm, requires_grad=False)
+            melspec = self.stft.mel_spectrogram(audio_norm)
+            melspec = torch.squeeze(melspec, 0)
+        else:
+            melspec = torch.from_numpy(np.load(filename))
+            assert melspec.size(0) == self.stft.n_mel_channels, \
+                ('Mel dimension mismatch: given {}, expected {}'.format(melspec.size(0), self.stft.n_mel_channels))
+        return melspec
 
-class audio_collate:
+    def get_text(self, text):
+        text_norm = torch.IntTensor(text_to_sequence(text))
+        return text_norm
+
+    def load_wav_to_torch(self, full_path):
+        sampling_rate, data = read(full_path)
+        return torch.FloatTensor(data.astype(np.float32)), sampling_rate
+
+    def __getitem__(self, index):
+        return self.get_mel_text_pair(self.audiopaths_and_text[index])
+
+    def __len__(self):
+        return len(self.audiopaths_and_text)
+
+class TextMelCollate:
+    """ Zero-pads model inputs and targets based on number of frames per step """
     def __init__(self, n_frames_per_step):
         self.n_frames_per_step = n_frames_per_step
 
     def __call__(self, batch):
+        """ Collate's training batch from normalized text and mel-spectrogram
+        PARAMS
+        ------
+        batch: [text_normalized, mel_normalized]
+        """
         # Right zero-pad all one-hot text sequences to max input length
         input_lengths, ids_sorted_decreasing = torch.sort(torch.LongTensor([len(x[0]) for x in batch]), dim=0, descending=True)
         max_input_len = input_lengths[0]
@@ -275,8 +244,8 @@ class audio_preprocesser:
     def run(self):
         # remove smaller sound than specific decibel(depending personal setting)
         decibel = 10
-        sampling_rate = hps.sample_rate
-        root_path = hps.default_data_path
+        sampling_rate = hps.sampling_rate
+        root_path = None
 
         for dir_name in os.listdir(root_path):
             save_path = os.path.join(root_path, f"trim_{dir_name}")
