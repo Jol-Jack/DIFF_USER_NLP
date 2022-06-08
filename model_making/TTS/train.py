@@ -396,8 +396,6 @@ def train(output_directory, log_directory, checkpoint_path, warm_start, n_gpus, 
                     save_checkpoint(model, optimizer, learning_rate, iteration, checkpoint_path)
 
             iteration += 1
-            info_logger.info(
-                "Train loss {} : {:.6f} Grad Norm {:.6f} {:.2f}s/it".format(iteration, reduced_loss, grad_norm, time.perf_counter() - start))
 
 
 if __name__ == '__main__':
