@@ -75,8 +75,8 @@ class hparams:
 
     # path
     default_data_path = "../../data/TTS"
-    default_ckpt_path = "../../models/TTS/ckpt"
-    default_log_path = "../../models/TTS/log"
+    default_ckpt_path = "../../models/TTS/Tacotron2/ckpt"
+    default_log_path = "../../models/TTS/Tacotron2/log"
     ignore_data_dir = ["k_kwunT"]
 
     # params
