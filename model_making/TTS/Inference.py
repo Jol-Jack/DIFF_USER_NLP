@@ -49,7 +49,10 @@ class Denoiser(torch.nn.Module):
 
     def __init__(self, waveglow, filter_length=1024, n_overlap=4, win_length=1024, mode='zeros'):
         super(Denoiser, self).__init__()
-        self.stft = STFT(filter_length=filter_length, hop_length=int(filter_length/n_overlap), win_length=win_length).cuda()
+        self.stft = STFT(filter_length=filter_length, hop_length=int(filter_length/n_overlap), win_length=win_length)
+        if hps.cudnn_enabled:
+            self.stft = self.stft.cuda()
+
         if mode == 'zeros':
             mel_input = torch.zeros(
                 (1, 80, 88), dtype=waveglow.upsample.weight.dtype, device=waveglow.upsample.weight.device)
@@ -66,7 +69,9 @@ class Denoiser(torch.nn.Module):
         self.register_buffer('bias_spec', bias_spec[:, :, 0][:, :, None])
 
     def forward(self, audio, strength=0.1):
-        audio_spec, audio_angles = self.stft.transform(audio.cuda().float())
+        if hps.cudnn_enabled:
+            audio = audio.cuda()
+        audio_spec, audio_angles = self.stft.transform(audio.float())
         audio_spec_denoised = audio_spec - self.bias_spec * strength
         audio_spec_denoised = torch.clamp(audio_spec_denoised, 0.0)
         audio_denoised = self.stft.inverse(audio_spec_denoised, audio_angles)
@@ -263,7 +268,10 @@ class WaveGlow(torch.nn.Module):
         if spect.type() == 'torch.cuda.HalfTensor':
             audio = torch.cuda.HalfTensor(spect.size(0), self.n_remaining_channels, spect.size(2)).normal_()
         else:
-            audio = torch.cuda.FloatTensor(spect.size(0), self.n_remaining_channels, spect.size(2)).normal_()
+            if hps.cudnn_enabled:
+                audio = torch.cuda.FloatTensor(spect.size(0), self.n_remaining_channels, spect.size(2)).normal_()
+            else:
+                audio = torch.FloatTensor(spect.size(0), self.n_remaining_channels, spect.size(2)).normal_()
 
         audio = torch.autograd.Variable(sigma*audio)
 
@@ -285,7 +293,10 @@ class WaveGlow(torch.nn.Module):
                 if spect.type() == 'torch.cuda.HalfTensor':
                     z = torch.cuda.HalfTensor(spect.size(0), self.n_early_size, spect.size(2)).normal_()
                 else:
-                    z = torch.cuda.FloatTensor(spect.size(0), self.n_early_size, spect.size(2)).normal_()
+                    if hps.cudnn_enabled:
+                        z = torch.cuda.FloatTensor(spect.size(0), self.n_early_size, spect.size(2)).normal_()
+                    else:
+                        z = torch.FloatTensor(spect.size(0), self.n_early_size, spect.size(2)).normal_()
                 audio = torch.cat((sigma*z, audio), 1)
 
         audio = audio.permute(0, 2, 1).contiguous().view(audio.size(0), -1).data
@@ -296,12 +307,9 @@ class Synthesizer:
         hps.n_mel_channels = 80
         hps.sampling_rate = 22050
 
-        model = load_model(hps)
+        model = load_model()
         model.load_state_dict(torch.load(tacotron_check)['state_dict'])
-        model.cuda().eval()
-
-        self.hparams = hps
-        self.tacotron = model
+        model.eval()
 
         with open('../../models/TTS/waveglow/config.json') as f:
             data = f.read()
@@ -311,15 +319,22 @@ class Synthesizer:
         waveglow = WaveGlow(**waveglow_config)
         # waveglow = load_checkpoint(waveglow_check, waveglow)
         waveglow.load_state_dict(waveglow_check)
-        waveglow.cuda().eval()
+        waveglow.eval()
+        if hps.cudnn_enabled:
+            model = model.cuda()
+            waveglow = waveglow.cuda()
 
+        self.hparams = hps
+        self.tacotron = model
         self.denoiser = Denoiser(waveglow)
         self.waveglow = waveglow
 
     def inference(self, text):
         assert type(text) == str, "텍스트 하나만 지원합니다."
         sequence = np.array(text_to_sequence(text))[None, :]
-        sequence = torch.autograd.Variable(torch.from_numpy(sequence)).cuda().long()
+        sequence = torch.autograd.Variable(torch.from_numpy(sequence)).long()
+        if hps.cudnn_enabled:
+            sequence = sequence.cuda()
 
         mel_outputs, mel_outputs_postnet, _, alignments = self.tacotron.inference(sequence)
 
@@ -345,7 +360,9 @@ class Synthesizer:
     def denoise_inference(self, text, sigma=0.666):
         assert type(text) == str, "텍스트 하나만 지원합니다."
         sequence = np.array(text_to_sequence(text))[None, :]
-        sequence = torch.autograd.Variable(torch.from_numpy(sequence)).cuda().long()
+        sequence = torch.autograd.Variable(torch.from_numpy(sequence)).long()
+        if hps.cudnn_enabled:
+            sequence = sequence.cuda()
 
         mel_outputs, mel_outputs_postnet, _, alignments = self.tacotron.inference(sequence)
 

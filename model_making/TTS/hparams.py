@@ -54,11 +54,11 @@ class hparams:
     ################################
     load_mel_from_disk = False
     ckp_for_transfer = None
-    ignore_dir = 'trim_k_kwunT'
+    ignore_dir = ['trim_k_kwunT']
     training_files = '../../data/TTS/train.txt'
     validation_files = '../../data/TTS/val.txt'
-    model_output_path = '../../models/TTS/ckpt'
-    logging_dir = '../../models/TTS/log'
+    model_output_path = '../../models/TTS/Tacotron2/ckpt'
+    logging_dir = '../../models/TTS/Tacotron2/log'
 
     ################################
     # Audio Parameters             #

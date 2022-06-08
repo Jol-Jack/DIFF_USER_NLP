@@ -15,6 +15,8 @@ from torch.utils.data import DataLoader
 from model import Tacotron2, warn_logger
 from hparams import hparams as hps
 from dataset import TextMelLoader, TextMelCollate
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
+
 info_logger = logging.getLogger("info_logger")
 info_logger.setLevel(logging.INFO)
 info_logger.addHandler(logging.StreamHandler())
@@ -113,7 +115,7 @@ def _unflatten_dense_tensors(flat, tensors):
         offset += numel
     return tuple(outputs)
 
-def init_distributed(hparams, n_gpus, rank, group_name):
+def init_distributed(n_gpus, rank, group_name):
     assert torch.cuda.is_available(), "Distributed mode requires CUDA."
     info_logger.info("Initializing Distributed")
 
@@ -121,7 +123,7 @@ def init_distributed(hparams, n_gpus, rank, group_name):
     torch.cuda.set_device(rank % torch.cuda.device_count())
 
     # Initialize distributed communication
-    dist.init_process_group(backend=hparams.dist_backend, init_method=hparams.dist_url,
+    dist.init_process_group(backend=hps.dist_backend, init_method=hps.dist_url,
                             world_size=n_gpus, rank=rank, group_name=group_name)
 
     info_logger.info("Done initializing distributed")
@@ -223,21 +225,21 @@ def plot_gate_outputs_to_numpy(gate_targets, gate_outputs):
     return data
 
 
-def prepare_dataloaders(hparams):
+def prepare_dataloaders():
     # Get data, data loaders and collate function ready
-    trainset = TextMelLoader(hparams.training_files, hparams)
-    valset = TextMelLoader(hparams.validation_files, hparams)
-    collate_fn = TextMelCollate(hparams.n_frames_per_step)
+    trainset = TextMelLoader(hps.training_files)
+    valset = TextMelLoader(hps.validation_files)
+    collate_fn = TextMelCollate(hps.n_frames_per_step)
 
-    if hparams.distributed_run:
+    if hps.distributed_run:
         train_sampler = DistributedSampler(trainset)
         shuffle = False
     else:
         train_sampler = None
         shuffle = True
 
-    train_loader = DataLoader(trainset, num_workers=1, shuffle=shuffle, sampler=train_sampler,
-                              batch_size=hparams.batch_size, pin_memory=False, drop_last=True, collate_fn=collate_fn)
+    train_loader = DataLoader(trainset, num_workers=hps.n_device, shuffle=shuffle, sampler=train_sampler,
+                              batch_size=hps.batch_size, pin_memory=False, drop_last=True, collate_fn=collate_fn)
     return train_loader, valset, collate_fn
 
 def prepare_directories_and_logger(output_directory, log_directory, rank):
@@ -245,16 +247,16 @@ def prepare_directories_and_logger(output_directory, log_directory, rank):
         if not os.path.isdir(output_directory):
             os.makedirs(output_directory)
             os.chmod(output_directory, 0o775)
-        logger = Tacotron2Logger(os.path.join(output_directory, log_directory))
+        logger = Tacotron2Logger(log_directory)
     else:
         logger = None
     return logger
 
-def load_model(hparams):
-    model = Tacotron2(hparams)
-    if hparams.cudnn_enabled:
+def load_model():
+    model = Tacotron2()
+    if hps.cudnn_enabled:
         model = model.cuda()
-        if hparams.distributed_run:
+        if hps.distributed_run:
             model = apply_gradient_allreduce(model)
     return model
 
@@ -280,7 +282,7 @@ def load_checkpoint(checkpoint_path, model, optimizer):
     optimizer.load_state_dict(checkpoint_dict['optimizer'])
     learning_rate = checkpoint_dict['learning_rate']
     iteration = checkpoint_dict['iteration']
-    info_logger.info("Loaded checkpoint '{}' from iteration {}" .format(checkpoint_path, iteration))
+    info_logger.info("Loaded checkpoint '{}' from iteration {}".format(checkpoint_path, iteration))
     return model, optimizer, learning_rate, iteration
 
 def save_checkpoint(model, optimizer, learning_rate, iteration, filepath):
@@ -313,7 +315,7 @@ def validate(model, criterion, valset, iteration, batch_size, n_gpus, collate_fn
         info_logger.info("Validation loss {}: {:9f}  ".format(iteration, val_loss))
         logger.log_validation(val_loss, model, y, y_pred, iteration)
 
-def train(output_directory, log_directory, checkpoint_path, warm_start, n_gpus, rank, group_name, hparams):
+def train(output_directory, log_directory, checkpoint_path, warm_start, n_gpus, rank, group_name):
     """Training and validation logging results to tensorboard and stdout
 
     Params
@@ -325,33 +327,33 @@ def train(output_directory, log_directory, checkpoint_path, warm_start, n_gpus, 
     rank (int): rank of current gpu
     hparams (object): class of contain hparameters
     """
-    if hparams.distributed_run:
-        init_distributed(hparams, n_gpus, rank, group_name)
+    if hps.distributed_run:
+        init_distributed(n_gpus, rank, group_name)
 
-    random.seed(hparams.seed)
-    torch.manual_seed(hparams.seed)
-    torch.cuda.manual_seed(hparams.seed)
+    random.seed(hps.seed)
+    torch.manual_seed(hps.seed)
+    torch.cuda.manual_seed(hps.seed)
 
-    model = load_model(hparams)
-    learning_rate = hparams.learning_rate
-    optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=hparams.weight_decay)
+    model = load_model()
+    learning_rate = hps.learning_rate
+    optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=hps.weight_decay)
 
-    if hparams.distributed_run:
+    if hps.distributed_run:
         model = apply_gradient_allreduce(model)
 
     criterion = Tacotron2Loss()
     logger = prepare_directories_and_logger(output_directory, log_directory, rank)
-    train_loader, valset, collate_fn = prepare_dataloaders(hparams)
+    train_loader, valset, collate_fn = prepare_dataloaders()
 
     # Load checkpoint if one exists
     iteration = 0
     epoch_offset = 0
     if checkpoint_path is not None:
         if warm_start:
-            model = warm_start_model(checkpoint_path, model, hparams.ignore_layers)
+            model = warm_start_model(checkpoint_path, model, hps.ignore_layers)
         else:
             model, optimizer, _learning_rate, iteration = load_checkpoint(checkpoint_path, model, optimizer)
-            if hparams.use_saved_learning_rate:
+            if hps.use_saved_learning_rate:
                 learning_rate = _learning_rate
             iteration += 1  # next iteration is iteration + 1
             epoch_offset = max(0, int(iteration / len(train_loader)))
@@ -359,7 +361,7 @@ def train(output_directory, log_directory, checkpoint_path, warm_start, n_gpus, 
     model.train()
     is_overflow = False
     # ================ MAIN TRAINNIG LOOP! ===================
-    for epoch in range(epoch_offset, hparams.epochs):
+    for epoch in range(epoch_offset, hps.epochs):
         info_logger.info("Epoch: {}".format(epoch))
         for i, batch in enumerate(train_loader):
             start = time.perf_counter()
@@ -371,13 +373,13 @@ def train(output_directory, log_directory, checkpoint_path, warm_start, n_gpus, 
             y_pred = model(x)
 
             loss = criterion(y_pred, y)
-            if hparams.distributed_run:
+            if hps.distributed_run:
                 reduced_loss = reduce_tensor(loss.data, n_gpus).item()
             else:
                 reduced_loss = loss.item()
             loss.backward()
 
-            grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), hparams.grad_clip_thresh)
+            grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), hps.grad_clip_thresh)
 
             optimizer.step()
 
@@ -386,14 +388,16 @@ def train(output_directory, log_directory, checkpoint_path, warm_start, n_gpus, 
                 info_logger.info("Train loss {} {:.6f} Grad Norm {:.6f} {:.2f}s/it".format(iteration, reduced_loss, grad_norm, duration))
                 logger.log_training(reduced_loss, grad_norm, learning_rate, duration, iteration)
 
-            if not is_overflow and (iteration % hparams.iters_per_checkpoint == 0):
-                validate(model, criterion, valset, iteration, hparams.batch_size,
-                         n_gpus, collate_fn, logger, hparams.distributed_run, rank)
+            if not is_overflow and (iteration % hps.iters_per_checkpoint == 0):
+                validate(model, criterion, valset, iteration, hps.batch_size,
+                         n_gpus, collate_fn, logger, hps.distributed_run, rank)
                 if rank == 0:
                     checkpoint_path = os.path.join(output_directory, "checkpoint_{}".format(iteration))
                     save_checkpoint(model, optimizer, learning_rate, iteration, checkpoint_path)
 
             iteration += 1
+            info_logger.info(
+                "Train loss {} : {:.6f} Grad Norm {:.6f} {:.2f}s/it".format(iteration, reduced_loss, grad_norm, time.perf_counter() - start))
 
 
 if __name__ == '__main__':
@@ -418,10 +422,10 @@ if __name__ == '__main__':
     torch.backends.cudnn.enabled = hps.cudnn_enabled
     torch.backends.cudnn.benchmark = hps.cudnn_benchmark
 
-    info_logger.info("Dynamic Loss Scaling:", hps.dynamic_loss_scaling)
-    info_logger.info("Distributed Run:", hps.distributed_run)
-    info_logger.info("cuDNN Enabled:", hps.cudnn_enabled)
-    info_logger.info("cuDNN Benchmark:", hps.cudnn_benchmark)
+    info_logger.info(f"Dynamic Loss Scaling: {hps.dynamic_loss_scaling}")
+    info_logger.info(f"Distributed Run: {hps.distributed_run}")
+    info_logger.info(f"cuDNN Enabled: {hps.cudnn_enabled}")
+    info_logger.info(f"cuDNN Benchmark: {hps.cudnn_benchmark}")
 
     train(args.output_directory, args.log_directory, args.checkpoint_path,
-          args.warm_start, args.n_gpus, args.rank, args.group_name, hps)
+          args.warm_start, args.n_gpus, args.rank, args.group_name)

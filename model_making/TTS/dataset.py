@@ -112,23 +112,22 @@ class TextMelLoader(torch.utils.data.Dataset):
         2) normalizes text and converts them to sequences of one-hot vectors
         3) computes mel-spectrograms from audio files.
     """
-    def __init__(self, audiopaths_and_text: str, hparams):
+    def __init__(self, audiopaths_and_text: str):
         self.audiopaths_and_text = self.load_filepaths_and_text(audiopaths_and_text)
-        self.max_wav_value = hparams.max_wav_value
-        self.sampling_rate = hparams.sampling_rate
-        self.load_mel_from_disk = hparams.load_mel_from_disk
-        self.ignore_dir = hparams.ignore_dir
+        self.max_wav_value = hps.max_wav_value
+        self.sampling_rate = hps.sampling_rate
+        self.load_mel_from_disk = hps.load_mel_from_disk
         self.stft = TacotronSTFT(
-            hparams.filter_length, hparams.hop_length, hparams.win_length,
-            hparams.n_mel_channels, hparams.sampling_rate, hparams.mel_fmin,
-            hparams.mel_fmax)
-        random.seed(hparams.seed)
+            hps.filter_length, hps.hop_length, hps.win_length,
+            hps.n_mel_channels, hps.sampling_rate, hps.mel_fmin,
+            hps.mel_fmax)
+        random.seed(hps.seed)
         random.shuffle(self.audiopaths_and_text)
 
     def load_filepaths_and_text(self, filename, split="|"):
         with open(filename, encoding='utf-8') as f:
-            filepaths_and_text = [line.strip().split(split) for line in f
-                                  if not any(ignore in line.strip().split(split)[0] for ignore in self.ignore_dir)]
+            filepaths_and_text = [line.strip().split(split) for line in f.readlines()
+                                  if not any([ignore in line.strip().split(split)[0] for ignore in hps.ignore_dir])]
         return filepaths_and_text
 
     def get_mel_text_pair(self, audiopath_and_text):
