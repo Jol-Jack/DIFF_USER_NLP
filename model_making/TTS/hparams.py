@@ -1,3 +1,4 @@
+import os
 import torch
 
 class symbols:
@@ -77,7 +78,10 @@ class hparams:
     default_data_path = "../../data/TTS"
     default_ckpt_path = "../../models/TTS/Tacotron2/ckpt"
     default_log_path = "../../models/TTS/Tacotron2/log"
-    ignore_data_dir = ["k_kwunT"]
+    last_ckpt = ""
+    if os.listdir(default_ckpt_path):
+        lask_ckpt = default_ckpt_path + f"/ckpt_{max(int(ckpt.split('_')[1]) for ckpt in os.listdir(default_ckpt_path))}"
+    ignore_data_dir = ["trim_k_kwunT"]
 
     # params
     # model
