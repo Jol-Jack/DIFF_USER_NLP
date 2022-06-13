@@ -55,6 +55,10 @@ class hparams:
     # train
     is_cuda = "cuda" if torch.cuda.is_available() else "cpu"
     n_workers = torch.cuda.device_count() - 1 if is_cuda == "cuda" else 2
+    if torch.cuda.is_available() and n_workers > 1:
+        os.environ["WORLD_SIZE"] = str(n_workers)
+        os.environ["RANK"] = "0"
+        os.environ["LOCAL_RANK"] = "0"
     convert_alpha = True
     convert_number = True
     pin_mem = True
@@ -78,9 +82,8 @@ class hparams:
     default_data_path = "../../data/TTS"
     default_ckpt_path = "../../models/TTS/Tacotron2/ckpt"
     default_log_path = "../../models/TTS/Tacotron2/log"
-    last_ckpt = ""
-    if os.listdir(default_ckpt_path):
-        lask_ckpt = default_ckpt_path + f"/ckpt_{max(int(ckpt.split('_')[1]) for ckpt in os.listdir(default_ckpt_path))}"
+    last_ckpt = f"{default_ckpt_path}/ckpt_{max(int(ckpt.split('_')[1]) for ckpt in os.listdir(default_ckpt_path))}"\
+        if os.listdir(default_ckpt_path) else ""
     ignore_data_dir = ["trim_k_kwunT"]
 
     # params

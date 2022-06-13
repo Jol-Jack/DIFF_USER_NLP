@@ -123,8 +123,8 @@ def train(args):
 
     # load checkpoint
     iteration = 1
-    if args.ckpt_pth != '':
-        model, optimizer, iteration = load_checkpoint(args.ckpt_pth, model, optimizer, device, n_gpu)
+    if hps.last_ckpt != '':
+        model, optimizer, iteration = load_checkpoint(hps.last_ckpt, model, optimizer, device, n_gpu)
         iteration += 1
 
     # get scheduler
