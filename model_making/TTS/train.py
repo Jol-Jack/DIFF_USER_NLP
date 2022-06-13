@@ -404,7 +404,7 @@ if __name__ == '__main__':
                         help='directory to save checkpoints')
     parser.add_argument('-l', '--log_directory', type=str, default=hps.logging_dir,
                         help='directory to save tensorboard logs')
-    parser.add_argument('-c', '--checkpoint_path', type=str, default=hps.ckp_for_transfer,
+    parser.add_argument('-c', '--checkpoint_path', type=str, default=hps.last_ckpt,
                         required=False, help='checkpoint path')
     parser.add_argument('--warm_start', action='store_true',
                         help='load model weights only, ignore specified layers')

@@ -39,13 +39,13 @@ class hparams:
     # Experiment Parameters        #
     ################################
     epochs = 500
-    iters_per_checkpoint = 1000
+    iters_per_checkpoint = 10000
     seed = 7777
     dynamic_loss_scaling = True
-    distributed_run = False
     dist_backend = "nccl"
     dist_url = "tcp://localhost:54321"
     cudnn_enabled = torch.cuda.is_available()
+    distributed_run = cudnn_enabled and torch.cuda.device_count() > 1
     cudnn_benchmark = False
     ignore_layers = ['embedding.weight']
 
@@ -53,12 +53,13 @@ class hparams:
     # Data Parameters             #
     ################################
     load_mel_from_disk = False
-    ckp_for_transfer = None
     ignore_dir = ['trim_k_kwunT']
     training_files = '../../data/TTS/train.txt'
     validation_files = '../../data/TTS/val.txt'
     model_output_path = '../../models/TTS/Tacotron2/ckpt'
     logging_dir = '../../models/TTS/Tacotron2/log'
+    last_ckpt = f"{model_output_path}/checkpoint_{max(int(ckpt.split('_')[1]) for ckpt in os.listdir(model_output_path))}" \
+        if os.listdir(model_output_path) else ""
 
     ################################
     # Audio Parameters             #
