@@ -89,7 +89,7 @@ def decompose_hangul(sent: str) -> List[str]:
 def prep_text(text: str, conv_alpha: bool = False, conv_number: bool = False) -> List[str]:
     # lower -> change special words -> convert alphabet(optional) -> remove white space
     # -> remove non-eng/num/hangle/punc char -> convert number -> decompose hangle
-    text = text.lower()
+    text = text.lower().strip()
     for r_exp, word in symbols.convert_symbols:
         text = re.sub(r_exp, word, text)
 
