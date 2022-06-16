@@ -114,7 +114,7 @@ def sequence_to_text(sequence) -> str:
 def prepare_dataloaders(data_dir: str, n_gpu: int) -> torch.utils.data.DataLoader:
     trainset = audio_dataset(data_dir)
     collate_fn = audio_collate(hps.n_frames_per_step)
-    sampler = DistributedSampler(trainset) if n_gpu > 1 else None
+    sampler = DistributedSampler(trainset) if n_gpu > 1 and torch.cuda.is_available() else None
     train_loader = DataLoader(trainset, num_workers=hps.n_workers, shuffle=n_gpu == 1,
                               batch_size=hps.batch_size, pin_memory=hps.pin_mem,
                               drop_last=True, collate_fn=collate_fn, sampler=sampler)
