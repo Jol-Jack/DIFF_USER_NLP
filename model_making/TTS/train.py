@@ -109,13 +109,13 @@ def train(args):
         n_gpu = int(os.environ['WORLD_SIZE'])
         # noinspection PyUnresolvedReferences
         torch.distributed.init_process_group(backend='nccl', rank=local_rank, world_size=n_gpu)
-    if hps.is_cuda == "cuda":
+    if torch.cuda.is_available():
         torch.cuda.set_device(local_rank)
     device = torch.device('cuda:{:d}'.format(local_rank))
 
     # build model
     model = Tacotron2()
-    model.to(hps.is_cuda, non_blocking=hps.pin_mem)
+    model.to(hps.device, non_blocking=hps.pin_mem)
     if n_gpu > 1:
         model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[local_rank])
     optimizer = torch.optim.Adam(model.parameters(), lr=hps.lr, betas=hps.betas, eps=hps.eps, weight_decay=hps.weight_decay)

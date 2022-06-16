@@ -10,11 +10,18 @@ from scipy.io import wavfile
 from matplotlib import font_manager, rc
 
 from hparams import hparams as hps
-from model import Tacotron2, Denoiser, WaveGlow
+from model import Tacotron2
+from glow import WaveGlow, Denoiser
 from dataset import text_to_sequence, inv_melspectrogram
 font_path = "C:/Windows/Fonts/H2PORM.TTF"
 font = font_manager.FontProperties(fname=font_path).get_name()
 rc('font', family=font)
+
+def infer(text, TTSmodel):
+    sequence = text_to_sequence(text)
+    sequence = torch.IntTensor(sequence)[None, :].to(hps.device).long()
+    mel_outputs, mel_outputs_postnet, _, alignments = TTSmodel.inference(sequence)
+    return mel_outputs, mel_outputs_postnet, alignments
 
 class Synthesizer:
     def __init__(self, tacotron_check, waveglow_check):
@@ -30,12 +37,6 @@ class Synthesizer:
 
         model = Tacotron2()
         model = self.load_model(tacotron_check, model)
-        if torch.cuda.is_available():
-            model.cuda().eval()  # .half()
-        else:
-            model.eval()
-
-        self.tacotron = model
 
         with open(waveglow_check+'/config.json') as f:
             data = f.read()
@@ -44,8 +45,15 @@ class Synthesizer:
 
         waveglow = WaveGlow(**waveglow_config)
         waveglow = self.load_model(waveglow_check+"/waveglow_256channels_universal_v5.pt", waveglow)
-        waveglow.cuda().eval()
 
+        if torch.cuda.is_available():
+            model.cuda().eval()
+            waveglow.cuda().eval()
+        else:
+            model.eval()
+            waveglow.eval()
+
+        self.tacotron = model
         self.denoiser = Denoiser(waveglow)
         self.waveglow = waveglow
 
@@ -61,13 +69,13 @@ class Synthesizer:
         else:
             model.load_state_dict(ckpt_dict['model'].state_dict())
 
-        model = model.to(hps.is_cuda, non_blocking=True).eval()
+        model = model.to(hps.device, non_blocking=True).eval()
         return model
 
     def synthesize(self, text, denoise=True, return_tacotron_output=True, sigma=0.666):
         """
         make sound from input sound.
-        if you want to synthesize phrase(not one sentence), using **make_sound_phrase** method.
+        if you want to synthesize phrase(not one sentence), using **synthesize_phrase** method.
 
 
         :param text: text for convert to sound.
@@ -83,62 +91,25 @@ class Synthesizer:
         >>> gen_audio, sr, tacoron_outputs = synthesizer.synthesize("음성으로 변환할 텍스트")
         """
         assert type(text) == str, "텍스트 하나만 지원합니다."
+        print("synthesize start")
         start = time.perf_counter()
         sequence = text_to_sequence(text)
-        sequence = torch.IntTensor(sequence)[None, :].to(hps.is_cuda).long()
+        sequence = torch.IntTensor(sequence)[None, :].to(hps.device).long()
         mel_outputs, mel_outputs_postnet, _, alignments = self.tacotron.inference(sequence)
 
         with torch.no_grad():
             audio = self.waveglow.infer(mel_outputs_postnet, sigma=sigma)
-        audio = audio[0].data.cpu().numpy()
-
         if denoise:
             audio_denoised = self.denoiser(audio, strength=0.01)[:, 0].cpu().numpy()
             audio = audio_denoised.reshape(-1)
+        else:
+            audio = audio[0].data.cpu().numpy()
 
-        print(f"synthesize text duration : {start-time.perf_counter():.2f}sec.")
+        print(f"synthesize text duration : {time.perf_counter()-start:.2f}sec.")
         if return_tacotron_output:
             return audio, self.sampling_rate, (mel_outputs, mel_outputs_postnet, alignments)
         else:
             return audio, self.sampling_rate
-
-    def synthesize_phrase(self, phrase, sep_length=4000, return_tacotron_output=True):
-        """
-        make sound from input pharse.
-        if you want to synthesize only one sentence, using **make_sound** method.
-
-        :param phrase: phrase for convert to sound.
-        :param sep_length: length of
-        :param return_tacotron_output: condition for return outputs of tacotron2. consist of mel_output, mel_output_postnet, attention_alignment.
-
-        :return: Sound : made sound, SamplingRate: sampling rate of made audio, (Optional)tacotron_outputs(mel_output, mel_outputs_postnet, alignments)
-
-        Example
-        ------
-        >>> synthesizer = Synthesizer("tacotron_path", "waveflow_path")
-        >>> gen_audio, sr, tacoron_outputs = synthesizer.synthesize_phrase("음성으로 변환할 \\n 텍스트구문 입니다. \\n 여러줄로 구성되어있죠.")
-        """
-        texts = phrase.split('\n')
-        audios = mel_outputs = mel_outputs_postnet = alignment = []
-
-        for text in texts:
-            if text == '':
-                audios.append(np.array([0] * sep_length))
-                continue
-            if return_tacotron_output:
-                audio, sampling_rate, tacotron_output = self.synthesize(text)
-                mel_outputs.append(tacotron_output[0])
-                mel_outputs_postnet.append(tacotron_output[1])
-                alignment.append(tacotron_output[2])
-            else:
-                audio, sampling_rate = self.synthesize(text, return_tacotron_output=False)
-            audios.append(audio)
-            audios.append(np.array([0] * sep_length))
-        if return_tacotron_output:
-            return np.hstack(audios[:-1]), self.sampling_rate, \
-                   (torch.concat(mel_outputs), torch.concat(mel_outputs_postnet), torch.concat(alignment))
-        else:
-            return np.hstack(audios[:-1]), self.sampling_rate
 
     def save_plot(self, outputMel, pth, text):
         assert pth[-4:] == ".png", "plot path has to end with '.png'"
@@ -154,7 +125,7 @@ class Synthesizer:
             wav_postnet *= hps.MAX_WAV_VALUE
             wavfile.write(pth, self.sampling_rate, wav_postnet.astype(np.int16))
         else:
-            wavfile.write(pth, self.sampling_rate, self.to_arr(outputAudio).astype(np.int16))
+            wavfile.write(pth, self.sampling_rate, outputAudio)
 
     def save_mel(self, outputMel, pth):
         assert pth[-4:] == ".npy", "mel path has to end with '.npy'"
@@ -194,7 +165,7 @@ if __name__ == '__main__':
     torch.backends.cudnn.benchmark = False
 
     syn = Synthesizer(args.ckpt_pth, "../../models/TTS/waveglow/")
-    syn_audio, sample_rate, tacotron_outputs = syn.synthesize(args.text)
+    syn_audio, sample_rate, tacotron_outputs = syn.synthesize(args.text, denoise=False)
 
     if args.img_pth != '':
         syn.save_plot(tacotron_outputs, args.img_pth, args.text)

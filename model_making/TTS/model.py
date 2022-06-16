@@ -11,7 +11,7 @@ def get_mask_from_lengths(lengths, pad=False) -> torch.Tensor:
         max_len += hps.n_frames_per_step - max_len % hps.n_frames_per_step
         assert max_len % hps.n_frames_per_step == 0
     ids = torch.arange(0, max_len, out=torch.LongTensor(max_len))
-    ids = ids.to(hps.is_cuda)
+    ids = ids.to(hps.device)
     mask = (ids < lengths.unsqueeze(1))
     return mask
 
@@ -463,12 +463,12 @@ class Tacotron2(nn.Module):
 
     def parse_batch(self, batch):
         text_padded, input_lengths, mel_padded, gate_padded, output_lengths = batch
-        text_padded = text_padded.to(hps.is_cuda).long()
-        input_lengths = input_lengths.to(hps.is_cuda).long()
+        text_padded = text_padded.to(hps.device).long()
+        input_lengths = input_lengths.to(hps.device).long()
         max_len = torch.max(input_lengths.data).item()
-        mel_padded = mel_padded.to(hps.is_cuda).float()
-        gate_padded = gate_padded.to(hps.is_cuda).float()
-        output_lengths = output_lengths.to(hps.is_cuda).long()
+        mel_padded = mel_padded.to(hps.device).float()
+        gate_padded = gate_padded.to(hps.device).float()
+        output_lengths = output_lengths.to(hps.device).long()
 
         return (text_padded, input_lengths, mel_padded, max_len, output_lengths), (mel_padded, gate_padded, output_lengths)
 
@@ -511,7 +511,7 @@ class Tacotron2(nn.Module):
 
     def teacher_infer(self, inputs, mels):
         il, _ = torch.sort(torch.LongTensor([len(x) for x in inputs]), dim=0, descending=True)
-        text_lengths = il.to(hps.is_cuda)
+        text_lengths = il.to(hps.device)
 
         embedded_inputs = self.embedding(inputs).transpose(1, 2)
 
@@ -522,4 +522,3 @@ class Tacotron2(nn.Module):
         mel_outputs_postnet = self.postnet(mel_outputs)
         mel_outputs_postnet = mel_outputs + mel_outputs_postnet
         return self.parse_output([mel_outputs, mel_outputs_postnet, gate_outputs, alignments])
-

@@ -53,8 +53,8 @@ class hparams:
     gl_iters = 30
 
     # train
-    is_cuda = "cuda" if torch.cuda.is_available() else "cpu"
-    n_workers = torch.cuda.device_count() - 1 if is_cuda == "cuda" else 2
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    n_workers = torch.cuda.device_count() - 1 if torch.cuda.is_available() else 2
     if torch.cuda.is_available() and n_workers > 1:
         os.environ["WORLD_SIZE"] = str(n_workers)
         os.environ["RANK"] = "0"

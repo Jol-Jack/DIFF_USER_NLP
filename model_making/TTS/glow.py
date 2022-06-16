@@ -4,6 +4,7 @@ import librosa.util
 from scipy.signal import get_window
 from torch.autograd import Variable
 from torch.nn import functional as F
+from hparams import hparams as hps
 
 class STFT(torch.nn.Module):
     """adapted from Prem Seetharaman's https://github.com/pseeth/pytorch-stft"""
@@ -145,7 +146,9 @@ class Denoiser(torch.nn.Module):
 
     def __init__(self, waveglow, filter_length=1024, n_overlap=4, win_length=1024, mode='zeros'):
         super(Denoiser, self).__init__()
-        self.stft = STFT(filter_length=filter_length, hop_length=int(filter_length/n_overlap), win_length=win_length).cuda()
+        self.stft = STFT(filter_length=filter_length, hop_length=int(filter_length/n_overlap), win_length=win_length)
+        if torch.cuda.is_available():
+            self.stft.cuda()
         if mode == 'zeros':
             mel_input = torch.zeros((1, 80, 88), dtype=waveglow.upsample.weight.dtype, device=waveglow.upsample.weight.device)
         elif mode == 'normal':
@@ -160,7 +163,7 @@ class Denoiser(torch.nn.Module):
         self.register_buffer('bias_spec', bias_spec[:, :, 0][:, :, None])
 
     def forward(self, audio, strength=0.1):
-        audio_spec, audio_angles = self.stft.transform(audio.cuda().float())
+        audio_spec, audio_angles = self.stft.transform(audio.to(hps.device).float())
         audio_spec_denoised = audio_spec - self.bias_spec * strength
         audio_spec_denoised = torch.clamp(audio_spec_denoised, 0.0)
         audio_denoised = self.stft.inverse(audio_spec_denoised, audio_angles)
@@ -174,11 +177,10 @@ class Invertible1x1Conv(torch.nn.Module):
     """
     def __init__(self, c):
         super(Invertible1x1Conv, self).__init__()
-        self.W_inverse = None
         self.conv = torch.nn.Conv1d(c, c, kernel_size=1, stride=1, padding=0, bias=False)
 
         # Sample a random orthonormal matrix to initialize weights
-        W = torch.qr(torch.FloatTensor(c, c).normal_())[0]
+        W = torch.linalg.qr(torch.FloatTensor(c, c).normal_())[0]
 
         # Ensure determinant is 1.0 not -1.0
         if torch.det(W) < 0:
@@ -190,16 +192,16 @@ class Invertible1x1Conv(torch.nn.Module):
         # shape
         batch_size, group_size, n_of_groups = z.size()
         W = self.conv.weight.squeeze()
-
         if reverse:
+            W_inverse = torch.Tensor()
             if not hasattr(self, 'W_inverse'):
                 # Reverse computation
-                W_inverse = W.float().inverse()
+                W_inverse = W.float()
+                W_inverse.inverse()
                 W_inverse = Variable(W_inverse[..., None])
                 if z.type() == 'torch.cuda.HalfTensor':
                     W_inverse = W_inverse.half()
-                self.W_inverse = W_inverse
-            z = F.conv1d(z, self.W_inverse, bias=None, stride=1, padding=0)
+            z = F.conv1d(z, W_inverse, bias=None, stride=1, padding=0, dilation=1, groups=1)
             return z
         else:
             # Forward computation
@@ -275,7 +277,6 @@ class WN(torch.nn.Module):
 
         return self.end(output)
 
-    @torch.jit.script
     def fused_add_tanh_sigmoid_multiply(self, input_a, input_b, n_channels):
         n_channels_int = n_channels[0]
         in_act = input_a + input_b
@@ -366,7 +367,7 @@ class WaveGlow(torch.nn.Module):
         if spect.type() == 'torch.cuda.HalfTensor':
             audio = torch.cuda.HalfTensor(spect.size(0), self.n_remaining_channels, spect.size(2)).normal_()
         else:
-            audio = torch.cuda.FloatTensor(spect.size(0), self.n_remaining_channels, spect.size(2)).normal_()
+            audio = torch.FloatTensor(spect.size(0), self.n_remaining_channels, spect.size(2)).to(hps.device).normal_()
 
         audio = torch.autograd.Variable(sigma*audio)
 
@@ -388,7 +389,7 @@ class WaveGlow(torch.nn.Module):
                 if spect.type() == 'torch.cuda.HalfTensor':
                     z = torch.cuda.HalfTensor(spect.size(0), self.n_early_size, spect.size(2)).normal_()
                 else:
-                    z = torch.cuda.FloatTensor(spect.size(0), self.n_early_size, spect.size(2)).normal_()
+                    z = torch.FloatTensor(spect.size(0), self.n_early_size, spect.size(2)).to(hps.device).normal_()
                 audio = torch.cat((sigma*z, audio), 1)
 
         audio = audio.permute(0, 2, 1).contiguous().view(audio.size(0), -1).data
