@@ -70,7 +70,7 @@ class hparams:
     dropout_rate = 0.4
     sch = True
     sch_step = 4000
-    max_iter = 200e3
+    max_iter = 250e3
     batch_size = 16
     iters_per_log = 10
     iters_per_sample = 500

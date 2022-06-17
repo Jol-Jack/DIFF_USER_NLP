@@ -215,8 +215,7 @@ class WN(torch.nn.Module):
     from WaveNet is the convolutions need not be causal.  There is also no dilation
     size reset.  The dilation only doubles on each layer
     """
-    def __init__(self, n_in_channels, n_mel_channels, n_layers, n_channels,
-                 kernel_size):
+    def __init__(self, n_in_channels, n_mel_channels, n_layers, n_channels, kernel_size):
         super(WN, self).__init__()
         assert(kernel_size % 2 == 1)
         assert(n_channels % 2 == 0)
