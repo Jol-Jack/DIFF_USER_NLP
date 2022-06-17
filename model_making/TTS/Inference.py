@@ -1,393 +1,247 @@
-import json
-import numpy as np
 import torch
 import os
+import time
 import argparse
-import soundfile as sf
+import numpy as np
+import matplotlib.pylab as plt
+from typing import Optional, Sequence
 
+import simpleaudio
+import librosa
+from scipy.io import wavfile
+from matplotlib import font_manager, rc
+
+from model import Tacotron2
+from glow import WaveGlow, Denoiser
 from hparams import hparams as hps
-from train import load_model
 from dataset import text_to_sequence
-from model import STFT
+font_path = "C:/Windows/Fonts/H2PORM.TTF"
+font = font_manager.FontProperties(fname=font_path).get_name()
+rc('font', family=font)
 
-def griffin_lim(magnitudes, stft_fn, n_iters=30):
-    """
-    PARAMS
-    ------
-    magnitudes: spectrogram magnitudes
-    stft_fn: STFT class with transform (STFT) and inverse (ISTFT) methods
-    """
+def griffin_lim(mel, n_iters=30):
+    # mel = _db_to_amp(mel)
+    mel = np.exp(mel)
 
-    angles = np.angle(np.exp(2j * np.pi * np.random.rand(*magnitudes.size())))
-    angles = angles.astype(np.float32)
-    angles = torch.autograd.Variable(torch.from_numpy(angles))
-    signal = stft_fn.inverse(magnitudes, angles).squeeze(1)
+    # S = _mel_to_linear(mel)
+    _mel_basis = librosa.filters.mel(hps.sampling_rate, (hps.num_freq - 1) * 2, n_mels=hps.n_mel_channels, fmin=hps.mel_fmin, fmax=hps.mel_fmax)
 
+    inv_mel_basis = np.linalg.pinv(_mel_basis)
+    inverse = np.dot(inv_mel_basis, mel)
+    S = np.maximum(1e-10, inverse)
+
+    # _griffin_lim(S ** hps.power)
+    n_fft, hop_length, win_length = (hps.num_freq - 1) * 2, hps.hop_length, hps.filter_length
+    angles = np.exp(2j * np.pi * np.random.rand(*S.shape))
+    S_complex = np.abs(S).astype(complex)
+    y = librosa.istft(S_complex * angles, hop_length=hop_length, win_length=win_length)
     for i in range(n_iters):
-        _, angles = stft_fn.transform(signal)
-        signal = stft_fn.inverse(magnitudes, angles).squeeze(1)
-    return signal
-
-def load_checkpoint(checkpoint_path, model):
-    assert os.path.isfile(checkpoint_path)
-    checkpoint_dict = torch.load(checkpoint_path, map_location='cpu')
-    model_for_loading = checkpoint_dict['model']
-    model.load_state_dict(model_for_loading.state_dict())
-    return model
-
-@torch.jit.script
-def fused_add_tanh_sigmoid_multiply(input_a, input_b, n_channels):
-    n_channels_int = n_channels[0]
-    in_act = input_a+input_b
-    t_act = torch.tanh(in_act[:, :n_channels_int, :])
-    s_act = torch.sigmoid(in_act[:, n_channels_int:, :])
-    acts = t_act * s_act
-    return acts
-
-class Denoiser(torch.nn.Module):
-    """ Removes model bias from audio produced with waveglow """
-
-    def __init__(self, waveglow, filter_length=1024, n_overlap=4, win_length=1024, mode='zeros'):
-        super(Denoiser, self).__init__()
-        self.stft = STFT(filter_length=filter_length, hop_length=int(filter_length/n_overlap), win_length=win_length)
-        if hps.cudnn_enabled:
-            self.stft = self.stft.cuda()
-
-        if mode == 'zeros':
-            mel_input = torch.zeros(
-                (1, 80, 88), dtype=waveglow.upsample.weight.dtype, device=waveglow.upsample.weight.device)
-        elif mode == 'normal':
-            mel_input = torch.randn(
-                (1, 80, 88), dtype=waveglow.upsample.weight.dtype, device=waveglow.upsample.weight.device)
-        else:
-            raise Exception("Mode {} if not supported".format(mode))
-
-        with torch.no_grad():
-            bias_audio = waveglow.infer(mel_input, sigma=0.0).float()
-            bias_spec, _ = self.stft.transform(bias_audio)
-
-        self.register_buffer('bias_spec', bias_spec[:, :, 0][:, :, None])
-
-    def forward(self, audio, strength=0.1):
-        if hps.cudnn_enabled:
-            audio = audio.cuda()
-        audio_spec, audio_angles = self.stft.transform(audio.float())
-        audio_spec_denoised = audio_spec - self.bias_spec * strength
-        audio_spec_denoised = torch.clamp(audio_spec_denoised, 0.0)
-        audio_denoised = self.stft.inverse(audio_spec_denoised, audio_angles)
-        return audio_denoised
-
-class Invertible1x1Conv(torch.nn.Module):
-    """
-    The layer outputs both the convolution, and the log determinant
-    of its weight matrix.  If reverse=True it does convolution with
-    inverse
-    """
-    def __init__(self, c):
-        super(Invertible1x1Conv, self).__init__()
-        self.conv = torch.nn.Conv1d(c, c, kernel_size=1, stride=1, padding=0, bias=False)
-        self.W_inverse = None
-
-        # Sample a random orthonormal matrix to initialize weights
-        W = torch.qr(torch.FloatTensor(c, c).normal_())[0]
-
-        # Ensure determinant is 1.0 not -1.0
-        if torch.det(W) < 0:
-            W[:, 0] = -1*W[:, 0]
-        W = W.view(c, c, 1)
-        self.conv.weight.data = W
-
-    def forward(self, z, reverse=False):
-        # shape
-        batch_size, group_size, n_of_groups = z.size()
-
-        W = self.conv.weight.squeeze()
-
-        if reverse:
-            if not hasattr(self, 'W_inverse'):
-                # Reverse computation
-                W_inverse = W.float().inverse()
-                W_inverse = torch.autograd.Variable(W_inverse[..., None])
-                if z.type() == 'torch.cuda.HalfTensor':
-                    W_inverse = W_inverse.half()
-                self.W_inverse = W_inverse
-            z = torch.nn.functional.conv1d(z, self.W_inverse, bias=None, stride=1, padding=0)
-            return z
-        else:
-            # Forward computation
-            log_det_W = batch_size * n_of_groups * torch.logdet(W)
-            z = self.conv(z)
-            return z, log_det_W
-
-class WN(torch.nn.Module):
-    """
-    This is the WaveNet like layer for the affine coupling.  The primary difference
-    from WaveNet is the convolutions need not be causal.  There is also no dilation
-    size reset.  The dilation only doubles on each layer
-    """
-    def __init__(self, n_in_channels, n_mel_channels, n_layers, n_channels, kernel_size):
-        super(WN, self).__init__()
-        assert(kernel_size % 2 == 1)
-        assert(n_channels % 2 == 0)
-        self.n_layers = n_layers
-        self.n_channels = n_channels
-        self.in_layers = torch.nn.ModuleList()
-        self.res_skip_layers = torch.nn.ModuleList()
-
-        start = torch.nn.Conv1d(n_in_channels, n_channels, 1)
-        start = torch.nn.utils.weight_norm(start, name='weight')
-        self.start = start
-
-        # Initializing last layer to 0 makes the affine coupling layers
-        # do nothing at first.  This helps with training stability
-        end = torch.nn.Conv1d(n_channels, 2*n_in_channels, 1)
-        end.weight.data.zero_()
-        end.bias.data.zero_()
-        self.end = end
-
-        cond_layer = torch.nn.Conv1d(n_mel_channels, 2*n_channels*n_layers, 1)
-        self.cond_layer = torch.nn.utils.weight_norm(cond_layer, name='weight')
-
-        for i in range(n_layers):
-            dilation = 2 ** i
-            padding = int((kernel_size*dilation - dilation)/2)
-            in_layer = torch.nn.Conv1d(n_channels, 2*n_channels, kernel_size, dilation=dilation, padding=padding)
-            in_layer = torch.nn.utils.weight_norm(in_layer, name='weight')
-            self.in_layers.append(in_layer)
-
-            # last one is not necessary
-            if i < n_layers - 1:
-                res_skip_channels = 2*n_channels
-            else:
-                res_skip_channels = n_channels
-            res_skip_layer = torch.nn.Conv1d(n_channels, res_skip_channels, 1)
-            res_skip_layer = torch.nn.utils.weight_norm(res_skip_layer, name='weight')
-            self.res_skip_layers.append(res_skip_layer)
-
-    def forward(self, forward_input):
-        audio, spect = forward_input
-        audio = self.start(audio)
-        output = torch.zeros_like(audio)
-        n_channels_tensor = torch.IntTensor([self.n_channels])
-
-        spect = self.cond_layer(spect)
-
-        for i in range(self.n_layers):
-            spect_offset = i*2*self.n_channels
-            acts = fused_add_tanh_sigmoid_multiply(
-                self.in_layers[i](audio), spect[:, spect_offset:spect_offset+2*self.n_channels, :], n_channels_tensor)
-
-            res_skip_acts = self.res_skip_layers[i](acts)
-            if i < self.n_layers - 1:
-                audio = audio + res_skip_acts[:, :self.n_channels, :]
-                output = output + res_skip_acts[:, self.n_channels:, :]
-            else:
-                output = output + res_skip_acts
-
-        return self.end(output)
-
-class WaveGlow(torch.nn.Module):
-    def __init__(self, n_mel_channels, n_flows, n_group, n_early_every, n_early_size, WN_config):
-        super(WaveGlow, self).__init__()
-
-        self.upsample = torch.nn.ConvTranspose1d(n_mel_channels, n_mel_channels, 1024, stride=256)
-        assert(n_group % 2 == 0)
-        self.n_flows = n_flows
-        self.n_group = n_group
-        self.n_early_every = n_early_every
-        self.n_early_size = n_early_size
-        self.WN = torch.nn.ModuleList()
-        self.convinv = torch.nn.ModuleList()
-
-        n_half = int(n_group/2)
-
-        # Set up layers with the right sizes based on how many dimensions
-        # have been output already
-        n_remaining_channels = n_group
-        for k in range(n_flows):
-            if k % self.n_early_every == 0 and k > 0:
-                n_half = n_half - int(self.n_early_size/2)
-                n_remaining_channels = n_remaining_channels - self.n_early_size
-            self.convinv.append(Invertible1x1Conv(n_remaining_channels))
-            self.WN.append(WN(n_half, n_mel_channels*n_group, **WN_config))
-        self.n_remaining_channels = n_remaining_channels  # Useful during inference
-
-    def forward(self, forward_input):
-        """
-        forward_input[0] = mel_spectrogram:  batch x n_mel_channels x frames
-        forward_input[1] = audio: batch x time
-        """
-        spect, audio = forward_input
-
-        #  Upsample spectrogram to size of audio
-        spect = self.upsample(spect)
-        assert(spect.size(2) >= audio.size(1))
-        if spect.size(2) > audio.size(1):
-            spect = spect[:, :, :audio.size(1)]
-
-        spect = spect.unfold(2, self.n_group, self.n_group).permute(0, 2, 1, 3)
-        spect = spect.contiguous().view(spect.size(0), spect.size(1), -1).permute(0, 2, 1)
-
-        audio = audio.unfold(1, self.n_group, self.n_group).permute(0, 2, 1)
-        output_audio = []
-        log_s_list = []
-        log_det_W_list = []
-
-        for k in range(self.n_flows):
-            if k % self.n_early_every == 0 and k > 0:
-                output_audio.append(audio[:, :self.n_early_size, :])
-                audio = audio[:, self.n_early_size:, :]
-
-            audio, log_det_W = self.convinv[k](audio)
-            log_det_W_list.append(log_det_W)
-
-            n_half = int(audio.size(1)/2)
-            audio_0 = audio[:, :n_half, :]
-            audio_1 = audio[:, n_half:, :]
-
-            output = self.WN[k]((audio_0, spect))
-            log_s = output[:, n_half:, :]
-            b = output[:, :n_half, :]
-            audio_1 = torch.exp(log_s)*audio_1 + b
-            log_s_list.append(log_s)
-
-            audio = torch.cat([audio_0, audio_1], 1)
-
-        output_audio.append(audio)
-        return torch.cat(output_audio, 1), log_s_list, log_det_W_list
-
-    def infer(self, spect, sigma=1.0):
-        spect = self.upsample(spect)
-        # trim conv artifacts. maybe pad spec to kernel multiple
-        time_cutoff = self.upsample.kernel_size[0] - self.upsample.stride[0]
-        spect = spect[:, :, :-time_cutoff]
-
-        spect = spect.unfold(2, self.n_group, self.n_group).permute(0, 2, 1, 3)
-        spect = spect.contiguous().view(spect.size(0), spect.size(1), -1).permute(0, 2, 1)
-
-        if spect.type() == 'torch.cuda.HalfTensor':
-            audio = torch.cuda.HalfTensor(spect.size(0), self.n_remaining_channels, spect.size(2)).normal_()
-        else:
-            if hps.cudnn_enabled:
-                audio = torch.cuda.FloatTensor(spect.size(0), self.n_remaining_channels, spect.size(2)).normal_()
-            else:
-                audio = torch.FloatTensor(spect.size(0), self.n_remaining_channels, spect.size(2)).normal_()
-
-        audio = torch.autograd.Variable(sigma*audio)
-
-        for k in reversed(range(self.n_flows)):
-            n_half = int(audio.size(1)/2)
-            audio_0 = audio[:, :n_half, :]
-            audio_1 = audio[:, n_half:, :]
-
-            output = self.WN[k]((audio_0, spect))
-
-            s = output[:, n_half:, :]
-            b = output[:, :n_half, :]
-            audio_1 = (audio_1 - b)/torch.exp(s)
-            audio = torch.cat([audio_0, audio_1], 1)
-
-            audio = self.convinv[k](audio, reverse=True)
-
-            if k % self.n_early_every == 0 and k > 0:
-                if spect.type() == 'torch.cuda.HalfTensor':
-                    z = torch.cuda.HalfTensor(spect.size(0), self.n_early_size, spect.size(2)).normal_()
-                else:
-                    if hps.cudnn_enabled:
-                        z = torch.cuda.FloatTensor(spect.size(0), self.n_early_size, spect.size(2)).normal_()
-                    else:
-                        z = torch.FloatTensor(spect.size(0), self.n_early_size, spect.size(2)).normal_()
-                audio = torch.cat((sigma*z, audio), 1)
-
-        audio = audio.permute(0, 2, 1).contiguous().view(audio.size(0), -1).data
-        return audio
+        stft = librosa.stft(y=y, n_fft=n_fft, hop_length=hop_length, win_length=win_length, pad_mode='reflect')
+        angles = np.exp(1j * np.angle(stft))
+        y = librosa.istft(S_complex * angles, hop_length=hop_length, win_length=win_length)
+    return np.clip(y, a_max=1, a_min=-1)
 
 class Synthesizer:
     def __init__(self, tacotron_check, waveglow_check):
-        hps.n_mel_channels = 80
-        hps.sampling_rate = 22050
+        """
+        Sound Synthesizer.
+        Using Tacotron2 model and WaveGlow Vocoder from NVIDIA.
 
-        model = load_model()
-        model.load_state_dict(torch.load(tacotron_check)['state_dict'])
-        model.eval()
+        :arg tacotron_check: checkpoint of Tacotron2 model path.
+        :arg waveglow_check : checkpoint of WaveGlow model path.
+        """
+        self.text = ""
+        self.outputMel = None
+        self.n_mel_channels = 80
+        self.sampling_rate = hps.sampling_rate
 
-        with open('../../models/TTS/waveglow/config.json') as f:
-            data = f.read()
-        config = json.loads(data)
-        waveglow_config = config["waveglow_config"]
+        model = Tacotron2()
+        model = self.load_model(tacotron_check, model)
 
-        waveglow = WaveGlow(**waveglow_config)
-        # waveglow = load_checkpoint(waveglow_check, waveglow)
-        waveglow.load_state_dict(waveglow_check)
-        waveglow.eval()
-        if hps.cudnn_enabled:
-            model = model.cuda()
-            waveglow = waveglow.cuda()
+        # waveglow = WaveGlow(n_mel_channels=hps.num_mels, n_flows=12, n_group=8, n_early_every=4,
+        #                     n_early_size=2, WN_config={"n_layers": 8, "n_channels": 256, "kernel_size": 3})
+        # waveglow = self.load_model(waveglow_check, waveglow)
 
-        self.hparams = hps
+        if torch.cuda.is_available():
+            model.cuda().eval()
+            # waveglow.cuda().eval()
+        else:
+            model.eval()
+            # waveglow.eval()
+
         self.tacotron = model
-        self.denoiser = Denoiser(waveglow)
-        self.waveglow = waveglow
+        # self.denoiser = Denoiser(waveglow)
+        # self.waveglow = waveglow
 
-    def inference(self, text):
-        assert type(text) == str, "텍스트 하나만 지원합니다."
-        sequence = np.array(text_to_sequence(text))[None, :]
-        sequence = torch.autograd.Variable(torch.from_numpy(sequence)).long()
-        if hps.cudnn_enabled:
-            sequence = sequence.cuda()
+    def synthesize(self, text, denoise=True, sigma=0.666):
+        """
+        make sound from input sound.
+        if you want to synthesize phrase(not one sentence), using **synthesize_phrase** method.
 
+        :param text: text for convert to sound.
+        :param denoise: condition for process denoising.
+        :param sigma: sigma for used in Waveglow inference. if increase this, (?) and decrease this, (?)
+
+        :return: Sound : made sound, SamplingRate: sampling rate of made audio
+
+        Example
+        ------
+        >>> synthesizer = Synthesizer("tacotron_path", "waveglow_path")
+        >>> gen_audio, sr = synthesizer.synthesize("음성으로 변환할 텍스트")
+        """
+        self.text = text
+        print("synthesize start")
+        start = time.perf_counter()
+        sequence = text_to_sequence(text)
+        sequence = torch.IntTensor(sequence)[None, :].to(hps.device).long()
         mel_outputs, mel_outputs_postnet, _, alignments = self.tacotron.inference(sequence)
 
-        with torch.no_grad():
-            a = self.waveglow.infer(mel_outputs_postnet, sigma=0.666)
-        a = a[0].data.cpu().numpy()
-        return a, self.hparams.sampling_rate
+        self.outputMel = (mel_outputs, mel_outputs_postnet, alignments)
+        # with torch.no_grad():
+        #     audio = self.waveglow.infer(mel_outputs_postnet, sigma=sigma)
+        # if denoise:
+        #     audio_denoised = self.denoiser(audio, strength=0.01)[:, 0].cpu().numpy()
+        #     audio = audio_denoised.reshape(-1)
+        # else:
+        #     audio = audio[0].data.cpu().numpy()
+        audio = griffin_lim(self.to_arr(mel_outputs_postnet[0]))
+        audio *= hps.MAX_WAV_VALUE
+        audio = audio.astype(np.int16)
 
-    # \n으로 구성된 여러개의 문장 inference 하는 코드
-    def inference_phrase(self, phrase, sep_length=4000):
-        texts = phrase.split('\n')
-        audios = []
-        sr = None
-        for text in texts:
-            if text == '':
-                audios.append(np.array([0] * sep_length))
-                continue
-            a, sr = self.inference(text)
-            audios.append(a)
-            audios.append(np.array([0] * sep_length))
-        return np.hstack(audios[:-1]), sr
+        print(f"synthesize text duration : {time.perf_counter()-start:.2f}sec.")
+        return audio, self.sampling_rate
 
-    def denoise_inference(self, text, sigma=0.666):
-        assert type(text) == str, "텍스트 하나만 지원합니다."
-        sequence = np.array(text_to_sequence(text))[None, :]
-        sequence = torch.autograd.Variable(torch.from_numpy(sequence)).long()
-        if hps.cudnn_enabled:
-            sequence = sequence.cuda()
+    def save_mel(self, pth):
+        """
+        save melspectrograms with npy.
+        melspectrograms from synthesize method.
+        have to processed after synthesize.
+        :param pth: path for saving melspectrograms. has to end with '.npy'.
 
-        mel_outputs, mel_outputs_postnet, _, alignments = self.tacotron.inference(sequence)
+        Example
+        -------
+        >>> synthesizer = Synthesizer("tacotron_path", "waveglow_path")
+        >>> gen_audio, sr = synthesizer.synthesize("음성으로 변환할 텍스트")
+        >>> synthesizer.save_mel("result_mel.npy")
+        """
+        assert pth[-4:] == ".npy", "mel path has to end with '.npy'"
+        assert self.outputMel, "save mel have to be processed after synthesize"
+        mel_outputs, mel_outputs_postnet, _ = self.outputMel
+        np.save(pth, self.to_arr(mel_outputs_postnet))
 
-        with torch.no_grad():
-            audio = self.waveglow.infer(mel_outputs_postnet, sigma=sigma)
+    def save_plot(self, pth):
+        """
+        save plots with image.
+        plots consists of mel_output, mel_output_postnet, attention alignment.
+        plots from synthesize method.
+        have to processed after synthesize.
+        :param pth: path for saving melspectrograms.
 
-        audio_denoised = self.denoiser(audio, strength=0.01)[:, 0].cpu().numpy()
-        return audio_denoised.reshape(-1), self.hparams.sampling_rate
+        Example
+        -------
+        >>> synthesizer = Synthesizer("tacotron_path", "waveglow_path")
+        >>> gen_audio, sr = synthesizer.synthesize("음성으로 변환할 텍스트")
+        >>> synthesizer.save_plot("result_plots.png")
+        """
+        assert self.outputMel, "save plot have to be processed after synthesize"
+        self.plot_data([self.to_arr(plot[0]) for plot in self.outputMel], self.text)
+        plt.savefig(pth)
+
+    def save_wave(self, pth, outputAudio: Optional[Sequence[int]], use_griffin_lim=False):
+        """
+        save audio with wav form.
+
+        case of use_griffin_lim is False,
+        save wave with given audio. so have to input 'outputAudio'.
+        outputAudio has to be audio data.
+
+        case of use_griffin_lim is True,
+        save wave with melspectrogram from synthsize method.
+        so have to processed after synthesize and don't have to input 'outputAudio'.
+
+        :param pth: path for saving audio.
+        :param outputAudio: audio data for save with wav form.
+        :param use_griffin_lim: condition of using griffin lim method.
+
+        Example
+        -------
+        >>> synthesizer = Synthesizer("tacotron_path", "waveglow_path")
+        >>> gen_audio, sr = synthesizer.synthesize("음성으로 변환할 텍스트")
+        >>> synthesizer.save_wave("result_wav.wav", gen_audio)
+        >>> synthesizer.save_wave("result_wav_using_griffin_lim.wav", use_griffin_lim=True)
+        """
+        assert pth[-4:] == ".wav", "wav path has to end with '.wav'"
+        if use_griffin_lim:
+            assert self.outputMel, "if you try to using griffin_lim method, you have to use synthesize method before."
+            _, mel_outputs_postnet, _ = self.outputMel
+            wav_postnet = griffin_lim(self.to_arr(mel_outputs_postnet[0]))
+            wav_postnet *= hps.MAX_WAV_VALUE
+            wavfile.write(pth, self.sampling_rate, wav_postnet.astype(np.int16))
+        else:
+            assert outputAudio is not None, "for save_wave without griffin_lim, you have to input 'outputAudio'."
+            wavfile.write(pth, self.sampling_rate, outputAudio)
+
+    def load_model(self, ckpt_pth, model) -> torch.nn.Module:
+        assert os.path.isfile(ckpt_pth)
+        if torch.cuda.is_available():
+            ckpt_dict = torch.load(ckpt_pth)
+        else:
+            ckpt_dict = torch.load(ckpt_pth, map_location=torch.device("cpu"))
+
+        if isinstance(model, Tacotron2):
+            model.load_state_dict(ckpt_dict['state_dict'])
+        else:
+            model.load_state_dict(ckpt_dict['model'].state_dict())
+
+        model = model.to(hps.device, non_blocking=True).eval()
+        return model
+
+    def plot_data(self, data, text, figsize=(16, 4)):
+        data_order = ["melspectrogram", "melspectorgram_with_postnet", "attention_alignments"]
+        fig, axes = plt.subplots(1, len(data), figsize=figsize)
+        fig.suptitle(text)
+        for i in range(len(data)):
+            if data_order[i] == "attention_alignments":
+                data[i] = data[i].T
+            axes[i].imshow(data[i], aspect='auto', origin='lower')
+            axes[i].set_title(data_order[i])
+            if data_order[i] == "attention_alignments":
+                axes[i].set_xlabel("Decoder TimeStep")
+                axes[i].set_ylabel("Encoder TimeStep(Attention)")
+            else:
+                axes[i].set_xlabel("Time")
+                axes[i].set_ylabel("Frequency")
+
+    def to_arr(self, var) -> np.ndarray:
+        return var.cpu().detach().numpy().astype(np.float32)
 
 
 if __name__ == '__main__':
+    last_ckpt_path = "../../models/TTS/Tacotron2/ckpt/NVIDIA/checkpoint_160000"
     parser = argparse.ArgumentParser()
-    parser.add_argument("-text", default='샘플 음성을 생성할 수 있습니다.', dest="text", help="text for TTS")
+    parser.add_argument('-c', '--ckpt_pth', type=str, default=last_ckpt_path, help='path to load Tacotron checkpoints')
+    parser.add_argument('-i', '--img_pth', type=str, default='../../res/res_img.png', help='path to save images(png)')
+    parser.add_argument('-w', '--wav_pth', type=str, default='../../res/res_wav.wav', help='path to save wavs(wav)')
+    parser.add_argument('-n', '--npy_pth', type=str, default='../../res/res_npy.npy', help='path to save mels(npy)')
+    parser.add_argument('-p', '--play_audio', type=bool, default=True, help='condition of playing generated audio.')
+    parser.add_argument('-t', '--text', type=str, default='타코트론 모델 입니다.', help='text to synthesize')
 
-    # 체크포인트 설정
-    tacotron2_checkpoint = ''
-    waveglow_checkpoint = '../../models/TTS/waveglow/waveglow_256channels_universal_v5.pt'
+    args = parser.parse_args()
 
-    # 음성 합성 모듈 생성
-    synthesizer = Synthesizer(tacotron2_checkpoint, waveglow_checkpoint)
+    torch.backends.cudnn.enabled = True
+    torch.backends.cudnn.benchmark = False
 
-    user_text = parser.parse_args().text
-    if user_text in "\n":
-        gen_audio, sampling_rate = synthesizer.inference(user_text)
-    else:
-        gen_audio, sampling_rate = synthesizer.inference_phrase(user_text)
+    syn = Synthesizer(args.ckpt_pth, "../../models/TTS/waveglow/waveglow_256channels_universal_v5.pt")
+    syn_audio, sample_rate = syn.synthesize(args.text, denoise=False)
 
-    sf.write('result.wav', gen_audio, sampling_rate)
+    if args.img_pth != '':
+        syn.save_plot(args.img_pth)
+    if args.wav_pth != '':
+        syn.save_wave(args.wav_pth, syn_audio)
+    if args.npy_pth != '':
+        syn.save_mel(args.npy_pth)
+    if args.play_audio:
+        wave_obj = simpleaudio.play_buffer(syn_audio, 1, 2, sample_rate)
+        wave_obj.wait_done()
+
+    print("generate ended")

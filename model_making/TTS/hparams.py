@@ -38,7 +38,7 @@ class hparams:
     ################################
     # Experiment Parameters        #
     ################################
-    epochs = 500
+    epochs = 1000
     iters_per_checkpoint = 10000
     seed = 7777
     dynamic_loss_scaling = True
@@ -56,7 +56,7 @@ class hparams:
     ignore_dir = ['trim_k_kwunT']
     training_files = '../../data/TTS/train.txt'
     validation_files = '../../data/TTS/val.txt'
-    model_output_path = '../../models/TTS/Tacotron2/ckpt'
+    model_output_path = '../../models/TTS/Tacotron2/ckpt/NVIDIA'
     logging_dir = '../../models/TTS/Tacotron2/log'
     last_ckpt = f"{model_output_path}/checkpoint_{max(int(ckpt.split('_')[1]) for ckpt in os.listdir(model_output_path))}" \
         if os.listdir(model_output_path) else ""
@@ -64,7 +64,7 @@ class hparams:
     ################################
     # Audio Parameters             #
     ################################
-    max_wav_value = 32768.0
+    MAX_WAV_VALUE = 32768.0
     sampling_rate = 22050
     filter_length = 1024
     hop_length = 256
@@ -73,11 +73,14 @@ class hparams:
     mel_fmin = 0.0
     mel_fmax = 8000.0
 
+    num_freq = 513
+
     ################################
     # Model Parameters             #
     ################################
     n_symbols = len(symbols.symbols)
     symbols_embedding_dim = 512
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     n_device = torch.cuda.device_count() if torch.cuda.is_available() else os.cpu_count() - 1
 
     # Encoder parameters

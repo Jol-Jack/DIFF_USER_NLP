@@ -114,7 +114,7 @@ class TextMelLoader(torch.utils.data.Dataset):
     """
     def __init__(self, audiopaths_and_text: str):
         self.audiopaths_and_text = self.load_filepaths_and_text(audiopaths_and_text)
-        self.max_wav_value = hps.max_wav_value
+        self.max_wav_value = hps.MAX_WAV_VALUE
         self.sampling_rate = hps.sampling_rate
         self.load_mel_from_disk = hps.load_mel_from_disk
         self.stft = TacotronSTFT(
