@@ -6,13 +6,11 @@ import random
 import numpy as np
 import matplotlib.pyplot as plt
 from hgtk.text import compose
-from typing import List
+from typing import List, Optional
 
-import glob
 import librosa
 import soundfile as sf
 from tqdm import tqdm
-from pathlib import Path
 from scipy.io.wavfile import read
 
 from model import TacotronSTFT
@@ -211,10 +209,13 @@ class TextMelCollate:
         return text_padded, input_lengths, mel_padded, gate_padded, output_lengths
 
 class audio_preprocesser:
-    def __init__(self):
-        self.run()
+    def __init__(self, data_path, save_path, top_db):
+        self.data_path = data_path
+        self.save_path = save_path
+        self.top_db = top_db
+        self.sr = hps.sampling_rate
 
-    def trim_audio(self, wav, top_db=10, pad_len=4000):
+    def trim_audio(self, wav, top_db, text, pad_len=4000):
         # remove space
         non_silence_indices = librosa.effects.split(wav, top_db=top_db)
         start = non_silence_indices[0][0]
@@ -222,10 +223,13 @@ class audio_preprocesser:
         # cutting audio
         wav = wav[start:end]
         # add padding
-        wav = np.hstack([np.zeros(pad_len), wav, np.zeros(pad_len)])
+        wav = np.hstack([np.zeros(pad_len), wav, np.zeros(pad_len+1000 if text[-1] == "." else pad_len)])
         return wav
 
-    def plot_wav(self, wav, sr):
+    def plot_wav(self, wav, sr: Optional[int] = None):
+        sr = self.sr if not sr else sr
+        if isinstance(wav, str):
+            wav, sr = sf.read(wav)
         plt.figure(1)
 
         plot_a = plt.subplot(211)
@@ -241,27 +245,29 @@ class audio_preprocesser:
         plt.show()
 
     def run(self):
+        assert os.path.exists(self.data_path), "data_path has to exist."
         # remove smaller sound than specific decibel(depending personal setting)
-        decibel = 10
-        sampling_rate = hps.sampling_rate
-        root_path = None
+        print("start converting")
+        for dir_name in os.listdir(self.data_path):
+            if not os.path.exists(os.path.join(self.data_path, dir_name, "transcript.txt")):
+                continue
 
-        for dir_name in os.listdir(root_path):
-            save_path = os.path.join(root_path, f"trim_{dir_name}")
-            os.makedirs(save_path, exist_ok=True)
+            save_dir = os.path.join(self.save_path, "trim_"+dir_name)
+            os.makedirs(save_dir, exist_ok=True)
+            for line in tqdm(open(os.path.join(self.data_path, dir_name, "transcript.txt"), "r+", encoding="utf-8").readlines(),
+                             desc=f"{dir_name} files converting"):
+                filename = line.split("|")[0]
+                os.makedirs(os.path.join(save_dir, filename.split("/")[0]), exist_ok=True)
 
-            for sub_dir_name in os.listdir(os.path.join(root_path, dir_name)):
-                if not os.path.isdir(os.path.join(root_path, dir_name, sub_dir_name)):
-                    continue
-                os.makedirs(os.path.join(root_path, dir_name, sub_dir_name), exist_ok=True)
-                file_list = glob.glob(os.path.join(root_path, dir_name, sub_dir_name, "*.wav"))
+                text = line.strip("|")[2]
+                wav, sr = librosa.load(os.path.join(self.data_path, dir_name, filename), sr=self.sr, mono=True)
 
-                for file_path in tqdm(file_list, desc=f"{dir_name}/{sub_dir_name} files converting"):
-                    wav, sr = librosa.load(file_path, sr=sampling_rate, mono=True)
+                trimed_wav = self.trim_audio(wav, top_db=self.top_db, text=text)
+                sf.write(os.path.join(save_dir, filename), trimed_wav, self.sr)
 
-                    trimed_wav = self.trim_audio(wav, top_db=decibel)
+        print("converting is done.")
 
-                    filename = Path(file_path).name
-                    temp_save_path = os.path.join(save_path, sub_dir_name, filename)
 
-                    sf.write(temp_save_path, trimed_wav, sampling_rate)
+if __name__ == '__main__':
+    ap = audio_preprocesser("../../data/TTS/raw", "../../data/TTS/new", top_db=20)
+    ap.plot_wav(r"../../data/TTS/new/trim_kss/1/1_0000.wav")
