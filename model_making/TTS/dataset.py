@@ -1,5 +1,6 @@
 import os
 import re
+import glob
 import torch
 import unicodedata
 import random
@@ -11,6 +12,8 @@ from typing import List, Optional
 import librosa
 import soundfile as sf
 from tqdm import tqdm
+from pydub import AudioSegment
+from pydub.silence import split_on_silence
 from scipy.io.wavfile import read
 
 from model import TacotronSTFT
@@ -209,28 +212,19 @@ class TextMelCollate:
         return text_padded, input_lengths, mel_padded, gate_padded, output_lengths
 
 class audio_preprocesser:
-    def __init__(self, data_path, save_path, top_db):
+    def __init__(self, data_path, save_path):
+        assert os.path.exists(data_path), "data_path has to exist."
+
         self.data_path = data_path
         self.save_path = save_path
-        self.top_db = top_db
         self.sr = hps.sampling_rate
-
-    def trim_audio(self, wav, top_db, text, pad_len=4000):
-        # remove space
-        non_silence_indices = librosa.effects.split(wav, top_db=top_db)
-        start = non_silence_indices[0][0]
-        end = non_silence_indices[-1][1]
-        # cutting audio
-        wav = wav[start:end]
-        # add padding
-        wav = np.hstack([np.zeros(pad_len), wav, np.zeros(pad_len+1000 if text[-1] == "." else pad_len)])
-        return wav
 
     def plot_wav(self, wav, sr: Optional[int] = None):
         sr = self.sr if not sr else sr
         if isinstance(wav, str):
             wav, sr = sf.read(wav)
         plt.figure(1)
+        plt.tight_layout()
 
         plot_a = plt.subplot(211)
         plot_a.plot(wav)
@@ -244,30 +238,39 @@ class audio_preprocesser:
 
         plt.show()
 
-    def run(self):
-        assert os.path.exists(self.data_path), "data_path has to exist."
-        # remove smaller sound than specific decibel(depending personal setting)
-        print("start converting")
+    def trim_audio(self, top_db):
+        print("start trimming")
         for dir_name in os.listdir(self.data_path):
             if not os.path.exists(os.path.join(self.data_path, dir_name, "transcript.txt")):
                 continue
 
             save_dir = os.path.join(self.save_path, "trim_"+dir_name)
             os.makedirs(save_dir, exist_ok=True)
-            for line in tqdm(open(os.path.join(self.data_path, dir_name, "transcript.txt"), "r+", encoding="utf-8").readlines(),
-                             desc=f"{dir_name} files converting"):
+            for line in tqdm(
+                    open(os.path.join(self.data_path, dir_name, "transcript.txt"), "r+", encoding="utf-8").readlines(),
+                    desc=f"{dir_name} files converting"):
                 filename = line.split("|")[0]
                 os.makedirs(os.path.join(save_dir, filename.split("/")[0]), exist_ok=True)
 
-                text = line.strip("|")[2]
                 wav, sr = librosa.load(os.path.join(self.data_path, dir_name, filename), sr=self.sr, mono=True)
 
-                trimed_wav = self.trim_audio(wav, top_db=self.top_db, text=text)
+                trimed_wav = self._trim(wav, top_db=top_db)
                 sf.write(os.path.join(save_dir, filename), trimed_wav, self.sr)
 
-        print("converting is done.")
+        print("trimming is done.")
+
+    def _trim(self, wav, top_db, pad_len=4000):
+        # remove space
+        non_silence_indices = librosa.effects.split(wav, top_db=top_db)
+        start = non_silence_indices[0][0]
+        end = non_silence_indices[-1][1]
+        # cutting audio
+        wav = wav[start:end]
+        # add padding
+        wav = np.hstack([np.zeros(pad_len), wav, np.zeros(pad_len)])
+        return wav
 
 
 if __name__ == '__main__':
-    ap = audio_preprocesser("../../data/TTS/raw", "../../data/TTS/new", top_db=20)
-    ap.plot_wav(r"../../data/TTS/new/trim_kss/1/1_0000.wav")
+    ap = audio_preprocesser("../../data/TTS/raw", "../../data/TTS/new")
+    ap.trim_audio(top_db=20)

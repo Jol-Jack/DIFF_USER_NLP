@@ -1,7 +1,9 @@
+import os
 import torch
 import numpy as np
 import librosa.util
 from scipy.signal import get_window
+from scipy.io.wavfile import write
 from torch.autograd import Variable
 from torch.nn import functional as F
 from hparams import hparams as hps
@@ -394,3 +396,46 @@ class WaveGlow(torch.nn.Module):
 
         audio = audio.permute(0, 2, 1).contiguous().view(audio.size(0), -1).data
         return audio
+
+
+def inference(mel_files, waveglow_path, sigma, output_dir, denoiser_strength):
+    mel_files = [line.rstrip() for line in open(mel_files, encoding='utf-8').readlines()]
+
+    waveglow = torch.load(waveglow_path)['model']
+    waveglow = waveglow.remove_weightnorm(waveglow)
+    if torch.cuda.is_available():
+        waveglow.cuda().eval()
+    else:
+        waveglow.eval()
+
+    denoiser = None
+    if denoiser_strength > 0:
+        denoiser = Denoiser(waveglow).cuda()
+
+    for i, file_path in enumerate(mel_files):
+        file_name = os.path.splitext(os.path.basename(file_path))[0]
+        mel = torch.load(file_path)
+        mel = torch.autograd.Variable(mel)
+        mel = torch.unsqueeze(mel, 0)
+
+        with torch.no_grad():
+            audio = waveglow.infer(mel, sigma=sigma)
+            if denoiser_strength > 0:
+                audio = denoiser(audio, denoiser_strength)
+            audio = audio * hps.MAX_WAV_VALUE
+
+        audio = audio.squeeze()
+        audio = audio.cpu().numpy().astype('int16')
+        audio_path = os.path.join(output_dir, f"{file_name}_synthesis.wav")
+        write(audio_path, hps.sampling_rate, audio)
+        print(audio_path)
+
+
+if __name__ == '__main__':
+    data_path_ = "../../data/TTS/mel_spectrograms"
+    output_path_ = "../../res"
+    waveglow_path_ = "../../models/TTS/waveglow/waveglow_256channels_universal_v5.pt"
+    sigma_ = 1.0
+    denoiser_strength_ = 0.1
+
+    inference(data_path_, waveglow_path_, sigma_, output_path_, denoiser_strength_)
