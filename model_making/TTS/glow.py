@@ -1,4 +1,6 @@
 import os
+import time
+
 import torch
 import numpy as np
 import librosa.util
@@ -7,6 +9,7 @@ from scipy.io.wavfile import write
 from torch.autograd import Variable
 from torch.nn import functional as F
 from hparams import hparams as hps
+torch.nn.Module.dump_patches = True
 
 class STFT(torch.nn.Module):
     """adapted from Prem Seetharaman's https://github.com/pseeth/pytorch-stft"""
@@ -397,9 +400,26 @@ class WaveGlow(torch.nn.Module):
         audio = audio.permute(0, 2, 1).contiguous().view(audio.size(0), -1).data
         return audio
 
+    @staticmethod
+    def remove_weightnorm(model):
+        def remove(conv_list):
+            new_conv_list = torch.nn.ModuleList()
+            for old_conv in conv_list:
+                old_conv = torch.nn.utils.remove_weight_norm(old_conv)
+                new_conv_list.append(old_conv)
+            return new_conv_list
 
-def inference(mel_files, waveglow_path, sigma, output_dir, denoiser_strength):
-    mel_files = [line.rstrip() for line in open(mel_files, encoding='utf-8').readlines()]
+        waveglow = model
+        for WN_ in waveglow.WN:
+            WN_.start = torch.nn.utils.remove_weight_norm(WN_.start)
+            WN_.in_layers = remove(WN_.in_layers)
+            WN_.cond_layer = torch.nn.utils.remove_weight_norm(WN_.cond_layer)
+            WN_.res_skip_layers = remove(WN_.res_skip_layers)
+        return waveglow
+
+
+def inference(mel_file_path, waveglow_path, sigma, output_dir, denoiser_strength):
+    mel_files = [os.path.join(mel_file_path, dir_name) for dir_name in os.listdir(mel_file_path)]
 
     waveglow = torch.load(waveglow_path)['model']
     waveglow = waveglow.remove_weightnorm(waveglow)
@@ -410,7 +430,8 @@ def inference(mel_files, waveglow_path, sigma, output_dir, denoiser_strength):
 
     denoiser = None
     if denoiser_strength > 0:
-        denoiser = Denoiser(waveglow).cuda()
+        denoiser = Denoiser(waveglow)
+        denoiser = denoiser.cuda() if torch.cuda.is_available() else denoiser
 
     for i, file_path in enumerate(mel_files):
         file_name = os.path.splitext(os.path.basename(file_path))[0]
@@ -418,11 +439,14 @@ def inference(mel_files, waveglow_path, sigma, output_dir, denoiser_strength):
         mel = torch.autograd.Variable(mel)
         mel = torch.unsqueeze(mel, 0)
 
+        print("start converting")
+        start = time.perf_counter()
         with torch.no_grad():
             audio = waveglow.infer(mel, sigma=sigma)
             if denoiser_strength > 0:
                 audio = denoiser(audio, denoiser_strength)
             audio = audio * hps.MAX_WAV_VALUE
+        print(f"end synthesize, duration : {time.perf_counter() - start:.2f}")
 
         audio = audio.squeeze()
         audio = audio.cpu().numpy().astype('int16')
@@ -433,7 +457,7 @@ def inference(mel_files, waveglow_path, sigma, output_dir, denoiser_strength):
 
 if __name__ == '__main__':
     data_path_ = "../../data/TTS/mel_spectrograms"
-    output_path_ = "../../res"
+    output_path_ = "../../res/waveglow"
     waveglow_path_ = "../../models/TTS/waveglow/waveglow_256channels_universal_v5.pt"
     sigma_ = 1.0
     denoiser_strength_ = 0.1

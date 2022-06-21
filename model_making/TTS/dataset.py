@@ -1,6 +1,5 @@
 import os
 import re
-import glob
 import torch
 import unicodedata
 import random
@@ -12,8 +11,6 @@ from typing import List, Optional
 import librosa
 import soundfile as sf
 from tqdm import tqdm
-from pydub import AudioSegment
-from pydub.silence import split_on_silence
 from scipy.io.wavfile import read
 
 from model import TacotronSTFT
@@ -238,10 +235,10 @@ class audio_preprocesser:
 
         plt.show()
 
-    def trim_audio(self, top_db):
+    def trim_audio(self, top_db, ignore_dir=None):
         print("start trimming")
         for dir_name in os.listdir(self.data_path):
-            if not os.path.exists(os.path.join(self.data_path, dir_name, "transcript.txt")):
+            if not os.path.exists(os.path.join(self.data_path, dir_name, "transcript.txt")) or dir_name in ignore_dir:
                 continue
 
             save_dir = os.path.join(self.save_path, "trim_"+dir_name)
@@ -273,4 +270,4 @@ class audio_preprocesser:
 
 if __name__ == '__main__':
     ap = audio_preprocesser("../../data/TTS/raw", "../../data/TTS/new")
-    ap.trim_audio(top_db=20)
+    ap.trim_audio(top_db=20, ignore_dir=["kss"])

@@ -15,7 +15,7 @@ from torch.utils.data import DataLoader
 from model import Tacotron2, warn_logger
 from hparams import hparams as hps
 from dataset import TextMelLoader, TextMelCollate
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '0'
 
 info_logger = logging.getLogger("info_logger")
 info_logger.setLevel(logging.INFO)
@@ -224,6 +224,14 @@ def plot_gate_outputs_to_numpy(gate_targets, gate_outputs):
     plt.close()
     return data
 
+def plot_alignment(alignment, path):
+    alignment = alignment.cpu().detach().numpy().astype(np.float32).T
+    plt.imshow(alignment, aspect='auto', origin='lower')
+    plt.title(os.path.basename(path))
+    plt.xlabel("Decoder TimeStep")
+    plt.ylabel("Encoder TimeStep(Attention)")
+    plt.savefig(path)
+
 
 def prepare_dataloaders():
     # Get data, data loaders and collate function ready
@@ -346,8 +354,8 @@ def train(output_directory, log_directory, checkpoint_path, warm_start, n_gpus, 
     train_loader, valset, collate_fn = prepare_dataloaders()
 
     # Load checkpoint if one exists
+    epoch = 0
     iteration = 0
-    epoch_offset = 0
     if checkpoint_path is not None:
         if warm_start:
             model = warm_start_model(checkpoint_path, model, hps.ignore_layers)
@@ -356,12 +364,12 @@ def train(output_directory, log_directory, checkpoint_path, warm_start, n_gpus, 
             if hps.use_saved_learning_rate:
                 learning_rate = _learning_rate
             iteration += 1  # next iteration is iteration + 1
-            epoch_offset = max(0, int(iteration / len(train_loader)))
+            epoch = max(0, int(iteration / len(train_loader)))
 
     model.train()
     is_overflow = False
     # ================ MAIN TRAINNIG LOOP! ===================
-    for epoch in range(epoch_offset, hps.epochs):
+    while iteration < hps.max_iter:
         info_logger.info("Epoch: {}".format(epoch))
         for i, batch in enumerate(train_loader):
             start = time.perf_counter()
@@ -389,13 +397,14 @@ def train(output_directory, log_directory, checkpoint_path, warm_start, n_gpus, 
                 logger.log_training(reduced_loss, grad_norm, learning_rate, duration, iteration)
 
             if not is_overflow and (iteration % hps.iters_per_checkpoint == 0):
-                validate(model, criterion, valset, iteration, hps.batch_size,
-                         n_gpus, collate_fn, logger, hps.distributed_run, rank)
+                validate(model, criterion, valset, iteration, hps.batch_size, n_gpus, collate_fn, logger, hps.distributed_run, rank)
                 if rank == 0:
                     checkpoint_path = os.path.join(output_directory, "checkpoint_{}".format(iteration))
                     save_checkpoint(model, optimizer, learning_rate, iteration, checkpoint_path)
+                    plot_alignment(y_pred[3], os.path.join(output_directory, "alignment", f"alignment_{iteration}.png"))
 
             iteration += 1
+            epoch += 1
 
 
 if __name__ == '__main__':

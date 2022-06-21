@@ -38,14 +38,15 @@ class hparams:
     ################################
     # Experiment Parameters        #
     ################################
-    epochs = 1000
+    max_iter = 3e+5
     iters_per_checkpoint = 10000
     seed = 7777
     dynamic_loss_scaling = True
     dist_backend = "nccl"
     dist_url = "tcp://localhost:54321"
     cudnn_enabled = torch.cuda.is_available()
-    distributed_run = cudnn_enabled and torch.cuda.device_count() > 1
+    # distributed_run = cudnn_enabled and torch.cuda.device_count() > 1
+    distributed_run = False
     cudnn_benchmark = False
     ignore_layers = ['embedding.weight']
 
