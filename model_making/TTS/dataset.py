@@ -3,8 +3,7 @@ from librosa.util import normalize
 from scipy.io import wavfile
 from hparams import hparams as hps, symbols
 from hgtk.text import compose
-from pathlib import Path
-from typing import List
+from typing import List, Optional
 from tqdm import tqdm
 import matplotlib.pyplot as plt
 import unicodedata
@@ -12,7 +11,6 @@ import numpy as np
 import torch
 import soundfile as sf
 import librosa
-import glob
 import os
 import re
 
@@ -242,23 +240,21 @@ class audio_collate:
 
         return text_padded, input_lengths, mel_padded, gate_padded, output_lengths
 
+
 class audio_preprocesser:
-    def __init__(self):
-        self.run()
+    def __init__(self, data_path, save_path):
+        assert os.path.exists(data_path), "data_path has to exist."
 
-    def trim_audio(self, wav, top_db=10, pad_len=4000):
-        # remove space
-        non_silence_indices = librosa.effects.split(wav, top_db=top_db)
-        start = non_silence_indices[0][0]
-        end = non_silence_indices[-1][1]
-        # cutting audio
-        wav = wav[start:end]
-        # add padding
-        wav = np.hstack([np.zeros(pad_len), wav, np.zeros(pad_len)])
-        return wav
+        self.data_path = data_path
+        self.save_path = save_path
+        self.sr = hps.sample_rate
 
-    def plot_wav(self, wav, sr):
+    def plot_wav(self, wav, sr: Optional[int] = None):
+        sr = self.sr if not sr else sr
+        if isinstance(wav, str):
+            wav, sr = sf.read(wav)
         plt.figure(1)
+        plt.tight_layout()
 
         plot_a = plt.subplot(211)
         plot_a.plot(wav)
@@ -272,28 +268,39 @@ class audio_preprocesser:
 
         plt.show()
 
-    def run(self):
-        # remove smaller sound than specific decibel(depending personal setting)
-        decibel = 10
-        sampling_rate = hps.sample_rate
-        root_path = hps.default_data_path
+    def trim_audio(self, top_db, ignore_dir=None):
+        print("start trimming")
+        for dir_name in os.listdir(self.data_path):
+            if not os.path.exists(os.path.join(self.data_path, dir_name, "transcript.txt")) or dir_name in ignore_dir:
+                continue
 
-        for dir_name in os.listdir(root_path):
-            save_path = os.path.join(root_path, f"trim_{dir_name}")
-            os.makedirs(save_path, exist_ok=True)
+            save_dir = os.path.join(self.save_path, "trim_"+dir_name)
+            os.makedirs(save_dir, exist_ok=True)
+            for line in tqdm(
+                    open(os.path.join(self.data_path, dir_name, "transcript.txt"), "r+", encoding="utf-8").readlines(),
+                    desc=f"{dir_name} files converting"):
+                filename = line.split("|")[0]
+                os.makedirs(os.path.join(save_dir, filename.split("/")[0]), exist_ok=True)
 
-            for sub_dir_name in os.listdir(os.path.join(root_path, dir_name)):
-                if not os.path.isdir(os.path.join(root_path, dir_name, sub_dir_name)):
-                    continue
-                os.makedirs(os.path.join(root_path, dir_name, sub_dir_name), exist_ok=True)
-                file_list = glob.glob(os.path.join(root_path, dir_name, sub_dir_name, "*.wav"))
+                wav, sr = librosa.load(os.path.join(self.data_path, dir_name, filename), sr=self.sr, mono=True)
 
-                for file_path in tqdm(file_list, desc=f"{dir_name}/{sub_dir_name} files converting"):
-                    wav, sr = librosa.load(file_path, sr=sampling_rate, mono=True)
+                trimed_wav = self._trim(wav, top_db=top_db)
+                sf.write(os.path.join(save_dir, filename), trimed_wav, self.sr)
 
-                    trimed_wav = self.trim_audio(wav, top_db=decibel)
+        print("trimming is done.")
 
-                    filename = Path(file_path).name
-                    temp_save_path = os.path.join(save_path, sub_dir_name, filename)
+    def _trim(self, wav, top_db, pad_len=4000):
+        # remove space
+        non_silence_indices = librosa.effects.split(wav, top_db=top_db)
+        start = non_silence_indices[0][0]
+        end = non_silence_indices[-1][1]
+        # cutting audio
+        wav = wav[start:end]
+        # add padding
+        wav = np.hstack([np.zeros(pad_len), wav, np.zeros(pad_len)])
+        return wav
 
-                    sf.write(temp_save_path, trimed_wav, sampling_rate)
+
+if __name__ == '__main__':
+    ap = audio_preprocesser("../../data/TTS/raw", "../../data/TTS/new")
+    ap.trim_audio(top_db=20, ignore_dir=["kss"])

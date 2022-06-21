@@ -16,14 +16,6 @@ np.random.seed(hps.seed)
 torch.manual_seed(hps.seed)
 torch.cuda.manual_seed(hps.seed)
 
-def plot_alignment(alignment, path):
-    alignment = alignment.cpu().detach().numpy().astype(np.float32).T
-    plt.imshow(alignment, aspect='auto', origin='lower')
-    plt.title(os.path.basename(path))
-    plt.xlabel("Decoder TimeStep")
-    plt.ylabel("Encoder TimeStep(Attention)")
-    plt.savefig(path)
-
 def save_checkpoint(ckpt_pth, model, optimizer, iteration):
     torch.save({'model': (model.module if hps.distributed else model).state_dict(),
                 'optimizer': optimizer.state_dict(), 'iteration': iteration}, ckpt_pth)
@@ -209,7 +201,6 @@ def train(args):
                 if args.ckpt_dir != '' and (iteration % hps.iters_per_ckpt == 0):
                     ckpt_pth = os.path.join(args.ckpt_dir, 'ckpt_{}'.format(iteration))
                     save_checkpoint(ckpt_pth, model, optimizer, iteration)
-                    plot_alignment(y_pred[3], os.path.join(args.ckpt_dir, "alignment", f"alignment_{iteration}.png"))
 
             iteration += 1
         epoch += 1
