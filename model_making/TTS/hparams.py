@@ -54,7 +54,9 @@ class hparams:
 
     # train
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    n_workers = torch.cuda.device_count() - 1 if torch.cuda.is_available() else 2
+    n_workers = torch.cuda.device_count() if torch.cuda.is_available() else 2
+    # distributed = torch.cuda.is_available() and n_workers > 1
+    distributed = False
     if torch.cuda.is_available() and n_workers > 1:
         os.environ["WORLD_SIZE"] = str(n_workers)
         os.environ["RANK"] = "0"
@@ -70,7 +72,7 @@ class hparams:
     dropout_rate = 0.4
     sch = True
     sch_step = 4000
-    max_iter = 250e3
+    max_iter = 300e3
     batch_size = 16
     iters_per_log = 10
     iters_per_sample = 500

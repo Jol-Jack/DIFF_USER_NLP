@@ -5,22 +5,32 @@ import argparse
 import numpy as np
 import tensorboardX
 import matplotlib.pyplot as plt
+import torch.distributed as dist
 from dataset import prepare_dataloaders, inv_melspectrogram
 from model import Tacotron2, Tacotron2Loss
 from hparams import hparams as hps
 from inference import infer
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '1'
 
 np.random.seed(hps.seed)
 torch.manual_seed(hps.seed)
 torch.cuda.manual_seed(hps.seed)
 
-def save_checkpoint(ckpt_pth, model, optimizer, iteration, n_gpu):
-    torch.save({'model': (model.module if n_gpu > 1 else model).state_dict(),
+def plot_alignment(alignment, path):
+    alignment = alignment.cpu().detach().numpy().astype(np.float32).T
+    plt.imshow(alignment, aspect='auto', origin='lower')
+    plt.title(os.path.basename(path))
+    plt.xlabel("Decoder TimeStep")
+    plt.ylabel("Encoder TimeStep(Attention)")
+    plt.savefig(path)
+
+def save_checkpoint(ckpt_pth, model, optimizer, iteration):
+    torch.save({'model': (model.module if hps.distributed else model).state_dict(),
                 'optimizer': optimizer.state_dict(), 'iteration': iteration}, ckpt_pth)
 
-def load_checkpoint(ckpt_pth, model, optimizer, device, n_gpu):
+def load_checkpoint(ckpt_pth, model, optimizer, device):
     ckpt_dict = torch.load(ckpt_pth, map_location=device)
-    (model.module if n_gpu > 1 else model).load_state_dict(ckpt_dict['model'])
+    (model.module if hps.distributed else model).load_state_dict(ckpt_dict['model'])
     optimizer.load_state_dict(ckpt_dict['optimizer'])
     iteration = ckpt_dict['iteration']
     return model, optimizer, iteration
@@ -100,15 +110,10 @@ class Tacotron2Logger(tensorboardX.SummaryWriter):
 
 def train(args):
     # setup env
-    rank = local_rank = 0
-    n_gpu = torch.cuda.device_count()
-    if 'WORLD_SIZE' in os.environ:
-        os.environ['OMP_NUM_THREADS'] = str(hps.n_workers)
-        rank = int(os.environ['RANK'])
-        local_rank = int(os.environ['LOCAL_RANK'])
-        n_gpu = int(os.environ['WORLD_SIZE'])
-        # noinspection PyUnresolvedReferences
-        torch.distributed.init_process_group(backend='nccl', rank=local_rank, world_size=n_gpu)
+    rank = 0
+    local_rank = 1
+    if hps.distributed:
+        dist.init_process_group(backend='nccl', rank=local_rank, world_size=hps.n_workers)
     if torch.cuda.is_available():
         torch.cuda.set_device(local_rank)
     device = torch.device('cuda:{:d}'.format(local_rank))
@@ -116,7 +121,7 @@ def train(args):
     # build model
     model = Tacotron2()
     model.to(hps.device, non_blocking=hps.pin_mem)
-    if n_gpu > 1:
+    if hps.distributed:
         model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[local_rank])
     optimizer = torch.optim.Adam(model.parameters(), lr=hps.lr, betas=hps.betas, eps=hps.eps, weight_decay=hps.weight_decay)
     criterion = Tacotron2Loss()
@@ -124,7 +129,7 @@ def train(args):
     # load checkpoint
     iteration = 1
     if hps.last_ckpt != '':
-        model, optimizer, iteration = load_checkpoint(hps.last_ckpt, model, optimizer, device, n_gpu)
+        model, optimizer, iteration = load_checkpoint(hps.last_ckpt, model, optimizer, device)
         iteration += 1
 
     # get scheduler
@@ -138,7 +143,7 @@ def train(args):
             scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, scheduling)
 
     # make dataset
-    train_loader = prepare_dataloaders(args.data_dir, n_gpu)
+    train_loader = prepare_dataloaders(args.data_dir, hps.n_workers)
 
     if rank == 0:
         # get logger ready
@@ -157,13 +162,13 @@ def train(args):
     # ================ MAIN TRAINING LOOP! ===================
     epoch = 0
     while iteration <= hps.max_iter:
-        if n_gpu > 1:
+        if hps.distributed:
             train_loader.sampler.set_epoch(epoch)
         for batch in train_loader:
             if iteration > hps.max_iter:
                 break
             start = time.perf_counter()
-            x, y = (model.module if n_gpu > 1 else model).parse_batch(batch)
+            x, y = (model.module if hps.distributed else model).parse_batch(batch)
             y_pred = model(x)
 
             # loss
@@ -195,7 +200,7 @@ def train(args):
                 # sample
                 if args.log_dir != '' and (iteration % hps.iters_per_sample == 0):
                     model.eval()
-                    output = infer(hps.eg_text, model.module if n_gpu > 1 else model)
+                    output = infer(hps.eg_text, model.module if hps.distributed else model)
                     model.train()
                     logger.sample_train(y_pred, iteration)
                     logger.sample_infer(output, iteration)
@@ -203,7 +208,8 @@ def train(args):
                 # save ckpt
                 if args.ckpt_dir != '' and (iteration % hps.iters_per_ckpt == 0):
                     ckpt_pth = os.path.join(args.ckpt_dir, 'ckpt_{}'.format(iteration))
-                    save_checkpoint(ckpt_pth, model, optimizer, iteration, n_gpu)
+                    save_checkpoint(ckpt_pth, model, optimizer, iteration)
+                    plot_alignment(y_pred[3], os.path.join(args.ckpt_dir, "alignment", f"alignment_{iteration}.png"))
 
             iteration += 1
         epoch += 1
