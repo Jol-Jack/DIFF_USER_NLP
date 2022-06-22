@@ -1,11 +1,13 @@
 import os
 import time
-import torch
 import argparse
 import numpy as np
-import tensorboardX
 import matplotlib.pyplot as plt
+
+import torch
+import tensorboardX
 import torch.distributed as dist
+
 from dataset import prepare_dataloaders, inv_melspectrogram
 from model import Tacotron2, Tacotron2Loss
 from hparams import hparams as hps

@@ -11,7 +11,7 @@ from scipy.io import wavfile
 from matplotlib import font_manager, rc
 
 from model import Tacotron2
-from glow import WaveGlow, Denoiser
+# from glow import WaveGlow, Denoiser
 from hparams import hparams as hps
 from dataset import text_to_sequence, inv_melspectrogram
 font_path = "C:/Windows/Fonts/H2PORM.TTF"
@@ -199,7 +199,7 @@ class Synthesizer:
 
 
 if __name__ == '__main__':
-    last_ckpt_path = "../../models/TTS/Tacotron2/ckpt/BogiHsu/ckpt_250000"
+    last_ckpt_path = "../../models/TTS/Tacotron2/ckpt/BogiHsu/ckpt_300000"
     parser = argparse.ArgumentParser()
     parser.add_argument('-c', '--ckpt_pth', type=str, default=last_ckpt_path, help='path to load Tacotron checkpoints')
     parser.add_argument('-i', '--img_pth', type=str, default='../../res/res_img.png', help='path to save images(png)')
@@ -213,7 +213,7 @@ if __name__ == '__main__':
     torch.backends.cudnn.enabled = True
     torch.backends.cudnn.benchmark = False
 
-    syn = Synthesizer(args.ckpt_pth, "../../models/TTS/waveglow/waveglow_256channels_universal_v5.pt")
+    syn = Synthesizer(args.ckpt_pth, None)
     syn_audio, sample_rate = syn.synthesize(args.text, denoise=False)
 
     if args.img_pth != '':

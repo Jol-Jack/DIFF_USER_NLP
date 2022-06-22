@@ -1,18 +1,22 @@
-from torch.utils.data import DistributedSampler, DataLoader, Dataset
-from librosa.util import normalize
-from scipy.io import wavfile
-from hparams import hparams as hps, symbols
-from hgtk.text import compose
-from typing import List, Optional
-from tqdm import tqdm
-import matplotlib.pyplot as plt
-import unicodedata
-import numpy as np
-import torch
-import soundfile as sf
-import librosa
-import os
 import re
+import os
+import unicodedata
+from tqdm import tqdm
+from typing import List, Optional
+
+import torch
+import numpy as np
+import matplotlib.pyplot as plt
+from hgtk.text import compose
+from torch.utils.data import DistributedSampler, DataLoader, Dataset
+
+import librosa
+import soundfile as sf
+from vctube import VCtube
+from scipy.io import wavfile
+from librosa.util import normalize
+
+from hparams import hparams as hps, symbols
 
 _mel_basis = None
 _symbol_to_id = {s: i for i, s in enumerate(symbols.symbols)}
@@ -242,11 +246,7 @@ class audio_collate:
 
 
 class audio_preprocesser:
-    def __init__(self, data_path, save_path):
-        assert os.path.exists(data_path), "data_path has to exist."
-
-        self.data_path = data_path
-        self.save_path = save_path
+    def __init__(self):
         self.sr = hps.sample_rate
 
     def plot_wav(self, wav, sr: Optional[int] = None):
@@ -268,21 +268,58 @@ class audio_preprocesser:
 
         plt.show()
 
-    def trim_audio(self, top_db, ignore_dir=None):
+    def change_tempo(self, data_dir, output_dir, tempos: List[float]):
+        assert os.path.exists(os.path.join(data_dir, "transcript.txt"))
+        if not os.path.exists(output_dir):
+            os.makedirs(output_dir)
+
+        print("start change")
+        transcript = ""
+        with open(os.path.join(data_dir, "transcript.txt"), "r+", encoding="utf-8") as f:
+            lines = f.readlines()
+            transcript += "".join(lines)
+            for tempo in tempos:
+                str_tempo = str(tempo).replace(".", "_")
+                t_dir = os.path.join(output_dir, str_tempo)
+                os.makedirs(t_dir)
+
+                for line in lines:
+                    path = line.split("|")[0]
+                    new_path = str_tempo+"/"+os.path.basename(path)
+                    script = "".join(line.split("|")[1:])
+
+                    os.system(f"sox {path} {new_path} tempo {tempo}")
+                    transcript += new_path + "|" + script
+        open(os.path.join(output_dir, "transcript.txt"), "w+", encoding="utf-8").write(transcript)
+        print("done")
+
+    def change_url_to_dataset(self, URL, output_dir, lang="ko"):
+        if not os.path.exists(output_dir):
+            os.makedirs(output_dir)
+        print("start change")
+
+        vc = VCtube(output_dir, URL, lang)
+        vc.download_audio()
+        vc.download_captions()
+        vc.audio_split()
+        print("done")
+
+    def trim_audio(self, data_path, save_path, top_db, ignore_dir=None):
+        assert os.path.exists(data_path), "data_path has to exist."
         print("start trimming")
-        for dir_name in os.listdir(self.data_path):
-            if not os.path.exists(os.path.join(self.data_path, dir_name, "transcript.txt")) or dir_name in ignore_dir:
+        for dir_name in os.listdir(data_path):
+            if not os.path.exists(os.path.join(data_path, dir_name, "transcript.txt")) or dir_name in ignore_dir:
                 continue
 
-            save_dir = os.path.join(self.save_path, "trim_"+dir_name)
+            save_dir = os.path.join(save_path, "trim_"+dir_name)
             os.makedirs(save_dir, exist_ok=True)
             for line in tqdm(
-                    open(os.path.join(self.data_path, dir_name, "transcript.txt"), "r+", encoding="utf-8").readlines(),
+                    open(os.path.join(data_path, dir_name, "transcript.txt"), "r+", encoding="utf-8").readlines(),
                     desc=f"{dir_name} files converting"):
                 filename = line.split("|")[0]
                 os.makedirs(os.path.join(save_dir, filename.split("/")[0]), exist_ok=True)
 
-                wav, sr = librosa.load(os.path.join(self.data_path, dir_name, filename), sr=self.sr, mono=True)
+                wav, sr = librosa.load(os.path.join(data_path, dir_name, filename), sr=self.sr, mono=True)
 
                 trimed_wav = self._trim(wav, top_db=top_db)
                 sf.write(os.path.join(save_dir, filename), trimed_wav, self.sr)
@@ -302,5 +339,5 @@ class audio_preprocesser:
 
 
 if __name__ == '__main__':
-    ap = audio_preprocesser("../../data/TTS/raw", "../../data/TTS/new")
-    ap.trim_audio(top_db=20, ignore_dir=["kss"])
+    ap = audio_preprocesser()
+    ap.trim_audio("../../data/TTS/raw", "../../data/TTS/new", top_db=20, ignore_dir=["kss"])

@@ -1,6 +1,6 @@
 import torch
-from torch import nn
 from math import sqrt
+from torch import nn
 from torch.autograd import Variable
 from torch.nn import functional as F
 from hparams import hparams as hps
