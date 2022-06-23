@@ -72,11 +72,14 @@ class Synthesizer:
         self.outputMel = (mel_outputs, mel_outputs_postnet, alignments)
 
         if use_griffin_lim:
+            # np.ndarray (T,)
             audio = inv_melspectrogram(self.to_arr(mel_outputs_postnet[0]))
             audio *= hps.MAX_WAV_VALUE
             audio = audio.astype(np.int16)
         else:
-            audio = self.hifi_gan.decode_batch(mel_outputs_postnet)
+            # torch.Size([B, 1, T])
+            audio = self.hifi_gan.decode_batch(mel_outputs_postnet).squeeze()
+            audio *= hps.MAX_WAV_VALUE
             audio = self.to_arr(audio).astype(np.int16)
 
         print(f"synthesize text duration : {time.perf_counter()-start:.2f}sec.")
