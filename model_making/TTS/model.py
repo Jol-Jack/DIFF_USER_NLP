@@ -499,6 +499,11 @@ class Tacotron2(nn.Module):
         return self.parse_output([mel_outputs, mel_outputs_postnet, gate_outputs, alignments], output_lengths)
 
     def inference(self, inputs):
+        """
+        :param inputs: input text Tensor(LongTensor, (1, input_len))
+        :return: mel_output(Tensor, (B, n_mel_channel, T)), mel_output_postnet(Tensor, (B, n_mel_channel, T)),
+                gate_outputs(Tensor, (B, T//n_frames_per_step, 1))), alignment(Tensor, (B, T//n_frames_pre_step, input_len))
+        """
         embedded_inputs = self.embedding(inputs).transpose(1, 2)
         encoder_outputs = self.encoder.inference(embedded_inputs)
         mel_outputs, gate_outputs, alignments = self.decoder.inference(encoder_outputs)

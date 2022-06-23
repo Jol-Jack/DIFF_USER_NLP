@@ -12,7 +12,8 @@ from dataset import prepare_dataloaders, inv_melspectrogram
 from model import Tacotron2, Tacotron2Loss
 from hparams import hparams as hps
 from inference import infer
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = '1'
+os.environ["CUDA_VISIBLE_DEVICES"] = '1'
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 
 np.random.seed(hps.seed)
 torch.manual_seed(hps.seed)

@@ -9,11 +9,12 @@ from typing import Optional, Sequence
 import simpleaudio
 from scipy.io import wavfile
 from matplotlib import font_manager, rc
+from speechbrain.pretrained import HIFIGAN
 
 from model import Tacotron2
-# from glow import WaveGlow, Denoiser
 from hparams import hparams as hps
 from dataset import text_to_sequence, inv_melspectrogram
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 font_path = "C:/Windows/Fonts/H2PORM.TTF"
 font = font_manager.FontProperties(fname=font_path).get_name()
 rc('font', family=font)
@@ -25,45 +26,35 @@ def infer(text, TTSmodel):
     return mel_outputs, mel_outputs_postnet, alignments
 
 class Synthesizer:
-    def __init__(self, tacotron_check, waveglow_check):
+    def __init__(self, tacotron_check):
         """
         Sound Synthesizer.
         Using Tacotron2 model and WaveGlow Vocoder from NVIDIA.
 
         :arg tacotron_check: checkpoint of Tacotron2 model path.
-        :arg waveglow_check : checkpoint of WaveGlow model path.
         """
         self.text = ""
         self.outputMel = None
         self.n_mel_channels = 80
         self.sampling_rate = hps.sample_rate
 
-        model = Tacotron2()
-        model = self.load_model(tacotron_check, model)
-
-        # waveglow = WaveGlow(n_mel_channels=hps.num_mels, n_flows=12, n_group=8, n_early_every=4,
-        #                     n_early_size=2, WN_config={"n_layers": 8, "n_channels": 256, "kernel_size": 3})
-        # waveglow = self.load_model(waveglow_check, waveglow)
-
+        self.tacotron = Tacotron2()
+        self.tacotron = self.load_model(tacotron_check, self.tacotron)
+        self.hifi_gan = HIFIGAN.from_hparams(source="speechbrain/tts-hifigan-ljspeech", savedir="../../models/TTS/hifigan")
         if torch.cuda.is_available():
-            model.cuda().eval()
-            # waveglow.cuda().eval()
+            self.tacotron.cuda().eval()
+            self.hifi_gan.cuda().eval()
         else:
-            model.eval()
-            # waveglow.eval()
+            self.tacotron.eval()
+            self.hifi_gan.eval()
 
-        self.tacotron = model
-        # self.denoiser = Denoiser(waveglow)
-        # self.waveglow = waveglow
-
-    def synthesize(self, text, denoise=True, sigma=0.666):
+    def synthesize(self, text, use_griffin_lim: bool = False):
         """
         make sound from input sound.
         if you want to synthesize phrase(not one sentence), using **synthesize_phrase** method.
 
         :param text: text for convert to sound.
-        :param denoise: condition for process denoising.
-        :param sigma: sigma for used in Waveglow inference. if increase this, (?) and decrease this, (?)
+        :param use_griffin_lim
 
         :return: Sound : made sound, SamplingRate: sampling rate of made audio
 
@@ -79,16 +70,14 @@ class Synthesizer:
         sequence = torch.IntTensor(sequence)[None, :].to(hps.device).long()
         mel_outputs, mel_outputs_postnet, _, alignments = self.tacotron.inference(sequence)
         self.outputMel = (mel_outputs, mel_outputs_postnet, alignments)
-        # with torch.no_grad():
-        #     audio = self.waveglow.infer(mel_outputs_postnet, sigma=sigma)
-        # if denoise:
-        #     audio_denoised = self.denoiser(audio, strength=0.01)[:, 0].cpu().numpy()
-        #     audio = audio_denoised.reshape(-1)
-        # else:
-        #     audio = audio[0].data.cpu().numpy()
-        audio = inv_melspectrogram(self.to_arr(mel_outputs_postnet[0]))
-        audio *= hps.MAX_WAV_VALUE
-        audio = audio.astype(np.int16)
+
+        if use_griffin_lim:
+            audio = inv_melspectrogram(self.to_arr(mel_outputs_postnet[0]))
+            audio *= hps.MAX_WAV_VALUE
+            audio = audio.astype(np.int16)
+        else:
+            audio = self.hifi_gan.decode_batch(mel_outputs_postnet)
+            audio = self.to_arr(audio).astype(np.int16)
 
         print(f"synthesize text duration : {time.perf_counter()-start:.2f}sec.")
         return audio, self.sampling_rate
@@ -213,8 +202,8 @@ if __name__ == '__main__':
     torch.backends.cudnn.enabled = True
     torch.backends.cudnn.benchmark = False
 
-    syn = Synthesizer(args.ckpt_pth, None)
-    syn_audio, sample_rate = syn.synthesize(args.text, denoise=False)
+    syn = Synthesizer(args.ckpt_pth)
+    syn_audio, sample_rate = syn.synthesize(args.text, use_griffin_lim=False)
 
     if args.img_pth != '':
         syn.save_plot(args.img_pth)
