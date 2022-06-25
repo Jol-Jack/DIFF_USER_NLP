@@ -8,10 +8,9 @@ import torch
 import tensorboardX
 import torch.distributed as dist
 
-from dataset import prepare_dataloaders, inv_melspectrogram
+from dataset import prepare_dataloaders, inv_melspectrogram, text_to_sequence
 from model import Tacotron2, Tacotron2Loss
 from hparams import hparams as hps
-from inference import infer
 os.environ["CUDA_VISIBLE_DEVICES"] = '1'
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 
@@ -32,6 +31,12 @@ def load_checkpoint(ckpt_pth, model, optimizer, device):
 
 def to_arr(var) -> np.ndarray:
     return var.cpu().detach().numpy().astype(np.float32)
+
+def infer(text, TTSmodel):
+    sequence = text_to_sequence(text)
+    sequence = torch.IntTensor(sequence)[None, :].to(hps.device).long()
+    mel_outputs, mel_outputs_postnet, _, alignments = TTSmodel.inference(sequence)
+    return mel_outputs, mel_outputs_postnet, alignments
 
 
 class Tacotron2Logger(tensorboardX.SummaryWriter):

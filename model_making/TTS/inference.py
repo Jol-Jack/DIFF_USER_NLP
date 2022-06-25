@@ -19,12 +19,6 @@ font_path = "C:/Windows/Fonts/H2PORM.TTF"
 font = font_manager.FontProperties(fname=font_path).get_name()
 rc('font', family=font)
 
-def infer(text, TTSmodel):
-    sequence = text_to_sequence(text)
-    sequence = torch.IntTensor(sequence)[None, :].to(hps.device).long()
-    mel_outputs, mel_outputs_postnet, _, alignments = TTSmodel.inference(sequence)
-    return mel_outputs, mel_outputs_postnet, alignments
-
 class Synthesizer:
     def __init__(self, tacotron_check):
         """
@@ -198,7 +192,7 @@ if __name__ == '__main__':
     parser.add_argument('-w', '--wav_pth', type=str, default='../../res/res_wav.wav', help='path to save wavs(wav)')
     parser.add_argument('-n', '--npy_pth', type=str, default='../../res/res_npy.npy', help='path to save mels(npy)')
     parser.add_argument('-p', '--play_audio', type=bool, default=True, help='condition of playing generated audio.')
-    parser.add_argument('-t', '--text', type=str, default='타코트론 모델 입니다.', help='text to synthesize')
+    parser.add_argument('-t', '--text', type=str, default='타코트론 모델이에요', help='text to synthesize')
 
     args = parser.parse_args()
 
