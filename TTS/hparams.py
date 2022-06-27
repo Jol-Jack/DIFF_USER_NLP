@@ -57,10 +57,10 @@ class hparams:
     n_workers = torch.cuda.device_count() if torch.cuda.is_available() else 2
     # distributed = torch.cuda.is_available() and n_workers > 1
     distributed = False
-    if torch.cuda.is_available() and n_workers > 1:
-        os.environ["WORLD_SIZE"] = str(n_workers)
-        os.environ["RANK"] = "0"
-        os.environ["LOCAL_RANK"] = "0"
+    # if torch.cuda.is_available() and n_workers > 1:
+    #     os.environ["WORLD_SIZE"] = str(n_workers)
+    #     os.environ["RANK"] = "0"
+    #     os.environ["LOCAL_RANK"] = "0"
     convert_alpha = True
     convert_number = True
     pin_mem = True
@@ -81,11 +81,11 @@ class hparams:
     eg_text = '타코트론 모델의 성능 확인을 위한 예시 텍스트 입니다.'
 
     # path
-    default_data_path = "../../data/TTS"
-    default_ckpt_path = "../../models/TTS/Tacotron2/ckpt/BogiHsu"
-    default_log_path = "../../models/TTS/Tacotron2/log"
+    default_data_path = "../data/TTS"
+    default_ckpt_path = "../models/TTS/Tacotron2/ckpt/BogiHsu"
+    default_log_path = "../models/TTS/Tacotron2/log"
     last_ckpt = f"{default_ckpt_path}/ckpt_{max(int(ckpt.split('_')[1]) for ckpt in os.listdir(default_ckpt_path))}"\
-        if os.listdir(default_ckpt_path) else ""
+        if os.path.exists(default_ckpt_path) and os.listdir(default_ckpt_path) else ""
     ignore_data_dir = ["trim_k_kwunT"]
 
     # params

@@ -5,13 +5,14 @@ import numpy as np
 import matplotlib.pylab as plt
 from typing import Sequence
 
+import simpleaudio
 from scipy.io import wavfile
 from matplotlib import font_manager, rc
 from speechbrain.pretrained import HIFIGAN
 
-from .model import Tacotron2
-from .hparams import hparams as hps
-from .dataset import text_to_sequence, griffin_lim
+from model import Tacotron2
+from hparams import hparams as hps
+from dataset import text_to_sequence, griffin_lim
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 font_path = "C:/Windows/Fonts/H2PORM.TTF"
 font = font_manager.FontProperties(fname=font_path).get_name()
@@ -44,14 +45,10 @@ class Synthesizer:
     def synthesize(self, text, use_griffin_lim: bool = False):
         """
         synthesize audio from input text.
-        max length of audio is `hps.n_frames_per_step * len(mel_outputs) / alignment.shape[1] >= hps.max_decoder_ratio`.
-        most of all time, the audio having that length is having wrong sound at last(case of 'Warning: Reached max decoder steps.').
-        and it means gate of tacotron 2 couldn't predict the end of sounds.
-        in this case, you can try giving short length text or something difference text.
 
         :param text: text for synthesize.
         :param use_griffin_lim: condition of using griffin_lim vocoder. it cause low quality sound(including machine sound, etc).
-        :return: audio(ndarray(Time, )), sampling_rate(int), duration(str, f'{duration:.2f}sec')
+        :return: audio(ndarray(Time, )), sampling_rate(int), duration(float, sec)
         """
         self.text = text
         print("synthesize start")
@@ -70,8 +67,9 @@ class Synthesizer:
             audio *= hps.MAX_WAV_VALUE
             audio = self.to_arr(audio).astype(np.int16)
 
-        print(f"synthesize text duration : {time.perf_counter()-start:.2f}sec.")
-        return audio, self.sampling_rate, f"{time.perf_counter()-start:.2f}sec"
+        end = time.perf_counter()
+        print(f"synthesize text duration : {end-start:.2f}sec.")
+        return audio, self.sampling_rate, end-start
 
     def save_plot(self, pth):
         """
@@ -82,19 +80,10 @@ class Synthesizer:
         :param pth: path for saving melspectrograms.
         """
         assert self.outputMel, "save plot have to be processed after synthesize"
+        if not os.path.exists(os.path.dirname(pth)):
+            os.mkdir(os.path.dirname(pth))
+
         self.plot_data([self.to_arr(plot[0]) for plot in self.outputMel], self.text)
-        plt.savefig(pth)
-
-    def save_audio_graph(self, pth, outputAudio):
-        plt.figure(1)
-        plt.tight_layout()
-        plot_b = plt.subplot(212)
-
-        plot_b.specgram(outputAudio, NFFT=1024, Fs=self.sampling_rate, noverlap=900)
-        plot_b.set_xlabel('Time')
-        plot_b.set_ylabel('Frequency')
-
-        plt.show()
         plt.savefig(pth)
 
     def save_wave(self, pth, outputAudio: Sequence[int]):
@@ -113,7 +102,14 @@ class Synthesizer:
         :param outputAudio: audio data for save with wav form.
         """
         assert pth[-4:] == ".wav", "wav path has to end with '.wav'"
+        if not os.path.exists(os.path.dirname(pth)):
+            os.mkdir(os.path.dirname(pth))
+
         wavfile.write(pth, self.sampling_rate, outputAudio)
+
+    def play_audio(self, audio):
+        wave_obj = simpleaudio.play_buffer(audio, 1, 2, self.sampling_rate)
+        wave_obj.wait_done()
 
     def load_model(self, ckpt_pth, model) -> torch.nn.Module:
         assert os.path.exists(ckpt_pth)
@@ -148,3 +144,11 @@ class Synthesizer:
 
     def to_arr(self, var) -> np.ndarray:
         return var.cpu().detach().numpy().astype(np.float32)
+
+
+if __name__ == '__main__':
+    synthesizer = Synthesizer("../models/TTS/Tacotron2/ckpt_300000", "../models/TTS/hifigan/")
+    audio, _, _ = synthesizer.synthesize("타코트론 모델입니다.")
+    synthesizer.save_plot("../res/res.png")
+    synthesizer.save_wave("../res/res.wav", audio)
+    synthesizer.play_audio(audio)
