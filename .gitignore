@@ -8,3 +8,4 @@ diff_user_venv
 plan.md
 # model ckpt
 models/TTS/Tacotron2/ckpt
+models/TTS/Tacotron2/log

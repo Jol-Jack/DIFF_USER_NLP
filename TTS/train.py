@@ -114,7 +114,7 @@ def train(args):
     local_rank = 1
     if hps.distributed:
         dist.init_process_group(backend='nccl', rank=local_rank, world_size=hps.n_workers)
-    if torch.cuda.is_available():
+    if local_rank:
         torch.cuda.set_device(local_rank)
     device = torch.device('cuda:{:d}'.format(local_rank))
 
