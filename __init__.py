@@ -5,6 +5,7 @@ from TTS.inference import Synthesizer
 
 synthesizer = Synthesizer("./models/TTS/Tacotron2/ckpt_300000", "./models/TTS/hifigan/")
 
+
 def synthesize(text: str,
                wav_path: Optional[str] = "./res/res_wav.wav",
                plot_path: Optional[str] = "./res/res_plot.png",
