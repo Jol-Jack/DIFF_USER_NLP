@@ -3,7 +3,7 @@ from numpy import ndarray
 
 from TTS.inference import Synthesizer
 
-synthesizer = Synthesizer("./models/TTS/Tacotron2/ckpt_300000", "./models/TTS/hifigan/")
+synthesizer = Synthesizer("./TTS/models/Tacotron2/ckpt_300000", "./TTS/models/hifigan/")
 
 
 def synthesize(text: str,

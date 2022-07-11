@@ -1,3 +1,5 @@
+import re
+
 import torch
 import os
 import time
@@ -14,7 +16,7 @@ from model import Tacotron2
 from hparams import hparams as hps
 from dataset import text_to_sequence, griffin_lim
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
-font_path = "C:/Windows/Fonts/H2PORM.TTF"
+font_path = "C:/Windows/Fonts/malgunbd.ttf"
 font = font_manager.FontProperties(fname=font_path).get_name()
 rc('font', family=font)
 
@@ -86,7 +88,7 @@ class Synthesizer:
         self.plot_data([self.to_arr(plot[0]) for plot in self.outputMel], self.text)
         plt.savefig(pth)
 
-    def save_wave(self, pth, outputAudio: Sequence[int]):
+    def save_wave(self, pth, outputAudio):
         """
         save audio with wav form.
 
@@ -147,8 +149,11 @@ class Synthesizer:
 
 
 if __name__ == '__main__':
-    synthesizer = Synthesizer("../models/TTS/Tacotron2/ckpt_300000", "../models/TTS/hifigan/")
-    g_audio, _, _ = synthesizer.synthesize("타코트론 모델입니다.")
+    path = "../res"
+    text = "주문을 도와드릴 에이아이 챗봇 입니다."
+    title = re.sub('\W', ' ', text).strip().replace(' ', '_')
+    synthesizer = Synthesizer("./models/Tacotron2/ckpt_300000", "../models/TTS/hifigan/")
+    g_audio, _, _ = synthesizer.synthesize(text)
     synthesizer.save_plot("../res/res.png")
-    synthesizer.save_wave("../res/res.wav", g_audio)
+    synthesizer.save_wave(f"{path}/{title}.wav", g_audio)
     synthesizer.play_audio(g_audio)

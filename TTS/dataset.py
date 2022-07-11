@@ -19,6 +19,7 @@ _mel_basis = None
 _symbol_to_id = {s: i for i, s in enumerate(symbols.symbols)}
 _id_to_symbol = {i: s for i, s in enumerate(symbols.symbols)}
 
+
 # text processing functions
 def get_number_of_digits(i: int) -> str:
     assert i != 0
@@ -31,6 +32,7 @@ def get_number_of_digits(i: int) -> str:
         num_of_digits = symbols.number_of_digits[(i % 4) - 1] + symbols.number_of_digits[(i // 4) + 2]
 
     return num_of_digits
+
 
 def convert_number(number: re.Match) -> str:
     number = number.group(0)
@@ -54,6 +56,7 @@ def convert_number(number: re.Match) -> str:
 
     return "".join(reversed(number_list))
 
+
 def decompose_hangul(sent: str) -> List[str]:
     res = []
     for hangul in sent:
@@ -71,9 +74,9 @@ def decompose_hangul(sent: str) -> List[str]:
                     middle = "ㅣ ㄱㅡ"
                 elif hangul == "ㅅ":
                     middle = "ㅣ ㅇㅗ"
-                hangul = compose(hangul+middle+hangul+" ", compose_code=" ")
+                hangul = compose(hangul + middle + hangul + " ", compose_code=" ")
         elif re.match("[ㅏ-ㅣ]", hangul) is not None:
-            hangul = compose("ㅇ"+hangul+" ", compose_code=" ")
+            hangul = compose("ㅇ" + hangul + " ", compose_code=" ")
 
         for c in hangul:
             # char_id = ord(c) - int('0xAC00', 16)
@@ -83,6 +86,7 @@ def decompose_hangul(sent: str) -> List[str]:
             #     res.append(symbols.JONG[char_id % 28])
             res += [jamo for jamo in unicodedata.normalize('NFKD', c)]
     return res
+
 
 # text sequencing functions
 def prep_text(text: str, conv_alpha: bool = False, conv_number: bool = False) -> List[str]:
@@ -102,12 +106,15 @@ def prep_text(text: str, conv_alpha: bool = False, conv_number: bool = False) ->
     text = decompose_hangul(text)
     return text
 
+
 def text_to_sequence(text: str) -> List[int]:
     text = prep_text(text, hps.convert_alpha, hps.convert_number)
     return [_symbol_to_id[s] for s in text if s in _symbol_to_id]
 
+
 def sequence_to_text(sequence) -> str:
     return "".join([_id_to_symbol[s] for s in sequence if s in _id_to_symbol])
+
 
 # dataloader
 def prepare_dataloaders(data_dir: str, n_gpu: int) -> torch.utils.data.DataLoader:
@@ -125,6 +132,7 @@ def _build_mel_basis():
     n_fft = (hps.num_freq - 1) * 2
     return librosa.filters.mel(hps.sample_rate, n_fft, n_mels=hps.num_mels, fmin=hps.fmin, fmax=hps.fmax)
 
+
 def melspectrogram(y):
     # _stft(y)
     n_fft, hop_length, win_length = (hps.num_freq - 1) * 2, hps.frame_shift, hps.frame_length
@@ -135,6 +143,7 @@ def melspectrogram(y):
     if _mel_basis is None:
         _mel_basis = _build_mel_basis()
     return np.log(np.maximum(1e-5, np.dot(_mel_basis, np.abs(D))))
+
 
 def griffin_lim(mel):
     # mel = _db_to_amp(mel)
@@ -163,16 +172,19 @@ def griffin_lim(mel):
 def get_text(text):
     return torch.IntTensor(text_to_sequence(text))
 
+
 def get_mel(wav_path):
     sr, wav = wavfile.read(wav_path)
     assert sr == hps.sample_rate
-    wav = normalize(wav.reshape(-1)/hps.MAX_WAV_VALUE)*0.95
+    wav = normalize(wav.reshape(-1) / hps.MAX_WAV_VALUE) * 0.95
     return torch.Tensor(melspectrogram(wav).astype(np.float32))
+
 
 def get_mel_text_pair(text, wav_path):
     text = get_text(text)
     mel = get_mel(wav_path)
     return text, mel
+
 
 def files_to_list(fdir):
     f_list = []
@@ -205,6 +217,7 @@ class audio_dataset(Dataset):
     def __len__(self):
         return len(self.f_list)
 
+
 class audio_collate:
     def __init__(self, n_frames_per_step):
         self.n_frames_per_step = n_frames_per_step
@@ -236,7 +249,7 @@ class audio_collate:
         for i in range(len(ids_sorted_decreasing)):
             mel = batch[ids_sorted_decreasing[i]][1]
             mel_padded[i, :, :mel.size(1)] = mel
-            gate_padded[i, mel.size(1)-1:] = 1
+            gate_padded[i, mel.size(1) - 1:] = 1
             output_lengths[i] = mel.size(1)
 
         return text_padded, input_lengths, mel_padded, gate_padded, output_lengths
